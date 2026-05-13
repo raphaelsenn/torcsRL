@@ -73,10 +73,6 @@ class RLAlgorithm(ABC):
         self.set_seeds()
 
     @abstractmethod
-    def act(self, obs: torch.Tensor, deterministic: bool=True) -> torch.Tensor:
-        raise NotImplementedError
-
-    @abstractmethod
     def train(self) -> None:
         raise NotImplementedError
     
