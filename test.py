@@ -1,0 +1,42 @@
+import gymnasium as gym
+from gym_torcs import TorcsEnv
+
+import torch
+import numpy as np
+from torcsrl.models.ac_ddpg import ActorMLP
+
+
+# Launch TORCS automatically
+#env = TorcsEnv(render_mode="human", throttle=True, max_episode_steps=10000, port=3001)
+env = gym.make(
+    "TorcsSCR-v0",
+    render_mode="human",        # or None
+    executable="/usr/local/bin/torcs",
+    port=3002,                  # 3001..3010
+    track_name="ruudskogen",
+    track_category="road",
+    laps=20,
+    debug=True,
+    gui_auto_start=True,
+)
+
+actor = ActorMLP(np.sum(env.observation_space.shape), 2)
+actor.load_state_dict(torch.load("crazy_guy.pt"))
+
+for ep in range(2):
+    obs, info = env.reset()
+    done = False
+    t = 0
+    total_reward = 0
+    print(info) 
+    while not done:
+        obs = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0) 
+        action = actor.act(obs).cpu().detach().numpy().flatten()
+        obs_next, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        total_reward += reward
+        obs = obs_next
+
+    print(f"Episode {ep + 1} with reward: {reward}")
+
+env.close()

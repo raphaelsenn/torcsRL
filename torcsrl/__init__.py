@@ -1,1 +1,1 @@
-from torcsrl.algorithms import DDPG
+from torcsrl.algorithms import DDPG, TD3
