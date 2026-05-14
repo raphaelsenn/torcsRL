@@ -77,7 +77,7 @@ class TD3(OffPolicyAlgorithm):
         action = self.actor.act(obs)
 
         if deterministic is False:
-            action += self.epsilon * torch.randn_like(action)
+            action += self.eps_noise * torch.randn_like(action)
 
         return action
 
@@ -98,7 +98,7 @@ class TD3(OffPolicyAlgorithm):
             # =============== Compute targets for Q function ==================
             with torch.no_grad():
                 # Target policy smoothing
-                noise = self.eps_noise_tgt * torch.randn(action) 
+                noise = self.eps_noise_tgt * torch.randn_like(action) 
                 noise_tgt = noise.clip(-self.eps_noise_clip, self.eps_noise_clip)
                 action_pi_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt
 
