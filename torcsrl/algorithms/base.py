@@ -6,7 +6,7 @@ import gymnasium as gym
 
 from torcsrl.config import EnvConfig
 from torcsrl.models.base import Actor, Critic
-from torcsrl.utils.evaluation_stats import EvluationStats
+from torcsrl.evaluation.evaluation_stats import EvluationStats
 from torcsrl.buffers.replay_buffer import ReplayBuffer
 from torcsrl.buffers.rollout_buffer import RolloutBuffer
 from torcsrl.utils.utils import to_batched_tensor
@@ -108,18 +108,38 @@ class RLAlgorithm(ABC):
 
     def evaluate(self, step: int) -> None:
         env = self.val_env 
+        
         rewards = np.zeros(self.n_eval_runs)
+        distance = np.zeros(self.n_eval_runs)
+        time_alive = np.zeros(self.n_eval_runs)
+        mean_speed = np.zeros(self.n_eval_runs)
+
         for episode in range(self.n_eval_runs):
             obs, _ = env.reset(seed=self.seed + episode + 1)
             env.action_space.seed(self.seed + episode + 1) 
             done = False
+            env_step = 0
 
             while not done:
                 action = self.act_numpy(obs, deterministic=True)
-                obs, reward, terminated, truncated, _ = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated 
+
+                env_step += 1 
                 rewards[episode] += reward
-        self.eval_stats.update(step, rewards)
+                mean_speed[episode] += (info["speedX"] - mean_speed[episode]) / env_step
+
+                if done:
+                    time_alive[episode] = info["timeAlive"]
+                    distance[episode] = info["distRaced"]
+
+        self.eval_stats.update(
+            step=step, 
+            rewards=rewards, 
+            distance=distance, 
+            time_alive=time_alive, 
+            mean_speed=mean_speed, 
+        )
         env.close()
 
     def set_seeds(self) -> None:
@@ -132,6 +152,8 @@ class RLAlgorithm(ABC):
             f"Episode: {episode:>6d}  "
             f"Average Return: {self.eval_stats.last_average_reward:>12.4f}  "
             f"Std Return: {self.eval_stats.last_std_reward:>12.4f}  "
+            f"Average distance: {self.eval_stats.last_average_distance:>12.4f}  "
+            f"Average speed: {self.eval_stats.last_average_speed:>12.4f}  "
         )
         print(report)
 
@@ -149,7 +171,7 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
         gradient_steps: int,
         save_every: int,
         eval_every: int,
-        n_eval_runs: int = 10,
+        n_eval_runs: int = 5,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -187,7 +209,7 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
         for _ in range(self.buffer_start_size): 
             # Exploration policy 
             action = env.action_space.sample()
-            action[1] = abs(action[1]) 
+            # action[1] = abs(action[1]) 
 
             obs_next, reward, terminated, truncated, _ = env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)

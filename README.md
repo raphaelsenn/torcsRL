@@ -1,5 +1,14 @@
 # torcsRL
 
+
+## Training and Evaluation
+
+| Purpose | Track | Preview |
+| --- | --- | --- |
+| Training | `street-1` | ![TORCS street-1 training track](./assets/torcs_street-1.png) |
+| Evaluation | `ruudskogen` | ![TORCS ruudskogen evaluation track](./assets/torcs_ruudskogen.png) |
+
+
 ## Install
 
 1. Install [gym_torcs](https://github.com/raphaelsenn/gym_torcs) by following the instructions.
@@ -15,6 +24,15 @@ conda activate gym_torcs
 ```bash
 pip install -e .
 ```
+
+## Hyperparameters
+
+## Hyperparameters
+
+| Algorithm | Timesteps | Learning rate actor | Learning rate critic | Policy delay | Batch size | Replay buffer size | Start steps | Gamma | Polyak tau | Exploration noise |
+| --------- | --------- | ------------------- | -------------------- | ------------ | ---------- | ------------------ | ----------- | ----- | ---------- | ----------------- |
+| DDPG | 1,000,000 | 1e-4 | 1e-3 | – | 64 | 1,000,000 | 25,000 | 0.99 | 0.001 | Gaussian, $\sigma$ = 0.1 | 
+| TD3 | 1,000,000 | 1e-4 | 1e-3 | 2 | 256 | 1,000,000 | 25,000 | 0.99 | 0.005 | Gaussian, $\sigma$ = 0.1 |
 
 ## Usage
 

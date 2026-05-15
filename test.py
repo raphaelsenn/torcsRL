@@ -21,7 +21,7 @@ env = gym.make(
 )
 
 actor = ActorMLP(np.sum(env.observation_space.shape), 2)
-actor.load_state_dict(torch.load("crazy_guy.pt"))
+actor.load_state_dict(torch.load("actor.pt"))
 
 for ep in range(2):
     obs, info = env.reset()
@@ -35,6 +35,8 @@ for ep in range(2):
         obs_next, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         total_reward += reward
+        # print(total_reward, info, terminated, truncated) 
+        print(f"Total Return: {total_reward}\tDistance Raced: {info['distRaced']}")
         obs = obs_next
 
     print(f"Episode {ep + 1} with reward: {reward}")

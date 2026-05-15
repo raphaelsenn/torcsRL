@@ -24,16 +24,16 @@ class DDPG(OffPolicyAlgorithm):
         lr_actor: float,
         lr_critic: float,
         gamma: float = 0.99,
-        tau_polyak: float = 0.005,
+        tau_polyak: float = 0.001,
         buffer_size: int = 1_000_000,
         buffer_start_size: int = 10_000,
-        batch_size: int = 256,
-        epsilon: float = 1.0,
+        batch_size: int = 32,
+        epsilon_start: float = 0.1,
         epsilon_min: float = 0.05,
         gradient_steps: int = 1,
-        save_every: int = 1_000,
-        eval_every: int = 1_000,
-        n_eval_runs: int = 10,
+        save_every: int = 5_000,
+        eval_every: int = 5_000,
+        n_eval_runs: int = 5,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -56,8 +56,8 @@ class DDPG(OffPolicyAlgorithm):
 
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
-        self.epsilon = epsilon
-        self.epsilon_start = epsilon 
+        self.epsilon = epsilon_start
+        self.epsilon_start = epsilon_start 
         self.epsilon_min = epsilon_min
 
         self.actor = ActorMLP(self.obs_dim, self.action_dim).to(self.device)
@@ -136,7 +136,8 @@ class DDPG(OffPolicyAlgorithm):
             obs_next, reward, terminated, truncated, _ = self.env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
             self.n_gradient_steps()
-            self.decay_epsilon(step, n_timesteps)
+            # self.decay_epsilon(step, n_timesteps) 
+            obs = obs_next
 
             if terminated or truncated:
                 obs, _ = self.env.reset()
@@ -149,8 +150,6 @@ class DDPG(OffPolicyAlgorithm):
 
             if step % self.save_every == 0:
                 self.save()
-
-            obs = obs_next
 
         self.evaluate(n_timesteps)
         self.save()

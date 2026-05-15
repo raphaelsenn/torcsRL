@@ -29,14 +29,14 @@ class TD3(OffPolicyAlgorithm):
         buffer_size: int = 1_000_000,
         buffer_start_size: int = 10_000,
         batch_size: int = 256,
-        eps_noise: float = 0.1,
-        eps_noise_tgt: float = 0.2,
-        eps_noise_clip: float = 0.1,
+        epsilon: float = 0.1,
+        epsilon_tgt_net: float = 0.2,
+        epsilon_clip: float = 0.5,
         gradient_steps: int = 1,
         policy_delay: int = 2,
         save_every: int = 1_000,
         eval_every: int = 1_000,
-        n_eval_runs: int = 10,
+        n_eval_runs: int = 5,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -60,9 +60,10 @@ class TD3(OffPolicyAlgorithm):
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
         self.policy_delay = policy_delay
-        self.eps_noise = eps_noise
-        self.eps_noise_tgt = eps_noise_tgt
-        self.eps_noise_clip = eps_noise_clip
+
+        self.epsilon = epsilon
+        self.epsilon_tgt_net = epsilon_tgt_net
+        self.epsilon_clip = epsilon_clip
 
         self.actor = ActorMLP(self.obs_dim, self.action_dim).to(self.device)
         self.actor_tgt = copy.deepcopy(self.actor)
@@ -77,7 +78,7 @@ class TD3(OffPolicyAlgorithm):
         action = self.actor.act(obs)
 
         if deterministic is False:
-            action += self.eps_noise * torch.randn_like(action)
+            action += self.epsilon * torch.randn_like(action)
 
         return action
 
@@ -98,8 +99,8 @@ class TD3(OffPolicyAlgorithm):
             # =============== Compute targets for Q function ==================
             with torch.no_grad():
                 # Target policy smoothing
-                noise = self.eps_noise_tgt * torch.randn_like(action) 
-                noise_tgt = noise.clip(-self.eps_noise_clip, self.eps_noise_clip)
+                noise = self.epsilon_tgt_net * torch.randn_like(action) 
+                noise_tgt = noise.clip(-self.epsilon_clip, self.epsilon_clip)
                 action_pi_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt
 
                 # Clipped double Q-learning
@@ -122,10 +123,9 @@ class TD3(OffPolicyAlgorithm):
             self.optimizer_critic.step()
 
             # ========================= Update policy =========================
-            # Freeze params of Q-function (save computational effort) 
-
             if step % self.policy_delay == 0: 
-            
+                
+            # Freeze params of Q-function (save computational effort) 
                 for p in self.critic.parameters():
                     p.requires_grad = False 
                 
@@ -154,6 +154,7 @@ class TD3(OffPolicyAlgorithm):
             obs_next, reward, terminated, truncated, _ = self.env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
             self.n_gradient_steps(step)
+            obs = obs_next
 
             if terminated or truncated:
                 obs, _ = self.env.reset()
@@ -166,8 +167,6 @@ class TD3(OffPolicyAlgorithm):
 
             if step % self.save_every == 0:
                 self.save()
-
-            obs = obs_next
 
         self.evaluate(n_timesteps)
         self.save()

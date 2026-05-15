@@ -9,5 +9,5 @@ class EnvConfig:
     port_val: int = 3002
 
     track_category: str = "road"
-    track_train: str = "forza"
+    track_train: str = "street-1"
     track_val: str = "ruudskogen"
