@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+DEFAULT_PORT = 3001
+SCR_MIN_PORT = 3001
+SCR_MAX_PORT = 3010
+
+DEFAULT_TORCS_EXECUTABLE = "/usr/local/bin/torcs"
+DEFAULT_TORCS_LIB_DIRS = (
+    "/usr/local/lib/torcs",
+    "/usr/local/lib",
+)
+
+DEFAULT_SPEED = 50.0
+MAX_SPEED_X = 300.0
+MAX_SPEED_Y = 100.0
+MAX_SPEED_Z = 100.0
+MAX_FOCUS = 200.0
+MAX_OPPONENTS = 200.0
+MAX_TRACK = 200.0
+MAX_RPM = 10000.0
+MAX_WHEEL_SPIN_VEL = 100.0
+
+TERMINAL_JUDGE_START = 500
+TERMINATION_LIMIT_PROGRESS = 5.0
+
+TRACK_SENSOR_ANGLES = (
+    -45.0, -19.0, -12.0, -7.0, -4.0, -2.5, -1.7, -1.0, -0.5,
+    0.0,
+    0.5, 1.0, 1.7, 2.5, 4.0, 7.0, 12.0, 19.0, 45.0,
+)

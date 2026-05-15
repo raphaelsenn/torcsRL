@@ -20,8 +20,8 @@ env = gym.make(
     gui_auto_start=True,
 )
 
-actor = ActorMLP(np.sum(env.observation_space.shape), 2)
-actor.load_state_dict(torch.load("actor.pt"))
+#actor = ActorMLP(np.sum(env.observation_space.shape), 2)
+#actor.load_state_dict(torch.load("actor.pt"))
 
 for ep in range(2):
     obs, info = env.reset()
@@ -31,7 +31,8 @@ for ep in range(2):
     print(info) 
     while not done:
         obs = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0) 
-        action = actor.act(obs).cpu().detach().numpy().flatten()
+        #action = actor.act(obs).cpu().detach().numpy().flatten()
+        action = env.action_space.sample()
         obs_next, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         total_reward += reward
