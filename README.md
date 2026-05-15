@@ -117,8 +117,8 @@ conda activate torcsrl
 2. Clone the repository:
 
 ```bash
-git clone https://github.com/raphaelsenn/gym_torcs
-cd gym_torcs
+git clone https://github.com/raphaelsenn/torcsrl
+cd torcsrl
 ```
 
 3. Install the Python requirements:
