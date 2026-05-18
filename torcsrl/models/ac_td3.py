@@ -9,8 +9,8 @@ class ActorMLP(Actor):
         self, 
         obs_dim: int, 
         action_dim: int,
-        h1_dim: int = 512,
-        h2_dim: int = 512,
+        h1_dim: int = 256,
+        h2_dim: int = 256,
     ) -> None:
         super().__init__(obs_dim, action_dim)
 
@@ -44,8 +44,8 @@ class CriticMLP(Critic):
             self, 
             obs_dim: int, 
             action_dim: int,
-            h1_dim: int = 512,
-            h2_dim: int = 512,
+            h1_dim: int = 256,
+            h2_dim: int = 256,
     ) -> None:
         super().__init__(obs_dim, action_dim)
 

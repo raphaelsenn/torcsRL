@@ -21,7 +21,7 @@ class RLAlgorithm(ABC):
         tau_polyak: float,
         save_every: int, 
         eval_every: int, 
-        n_eval_runs: int = 5,
+        n_eval_runs: int,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -106,6 +106,7 @@ class RLAlgorithm(ABC):
         action = action.flatten().cpu().numpy()
         return action
 
+    @torch.no_grad()
     def evaluate(self, step: int) -> None:
         env = self.val_env 
         
@@ -113,6 +114,7 @@ class RLAlgorithm(ABC):
         distance = np.zeros(self.n_eval_runs)
         time_alive = np.zeros(self.n_eval_runs)
         mean_speed = np.zeros(self.n_eval_runs)
+        successful = np.zeros(self.n_eval_runs, dtype=np.uint8)
 
         for episode in range(self.n_eval_runs):
             obs, _ = env.reset(seed=self.seed + episode + 1)
@@ -132,13 +134,15 @@ class RLAlgorithm(ABC):
                 if done:
                     time_alive[episode] = info["timeAlive"]
                     distance[episode] = info["distRaced"]
+                    successful[episode] = int(info["successfulLap"])
 
         self.eval_stats.update(
             step=step, 
             rewards=rewards, 
             distance=distance, 
             time_alive=time_alive, 
-            mean_speed=mean_speed, 
+            mean_speed=mean_speed,
+            successful=successful
         )
         env.close()
 
@@ -146,14 +150,16 @@ class RLAlgorithm(ABC):
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
 
-    def print_stats(self, step: int, episode: int) -> None:
+    def print_stats(self, step: int, episode: int, time: float) -> None:
         report = (
             f"Timestep: {step:>9d}  "
             f"Episode: {episode:>6d}  "
             f"Average Return: {self.eval_stats.last_average_reward:>12.4f}  "
             f"Std Return: {self.eval_stats.last_std_reward:>12.4f}  "
-            f"Average distance: {self.eval_stats.last_average_distance:>12.4f}  "
-            f"Average speed: {self.eval_stats.last_average_speed:>12.4f}  "
+            f"Average Distance: {self.eval_stats.last_average_distance:>12.4f}  "
+            f"Average Speed: {self.eval_stats.last_average_speed:>12.4f}  "
+            f"Successful Laps: {self.eval_stats.last_successful_laps:>2d}\{self.n_eval_runs}  "
+            f"Time: {time:>12.2f}s  "
         )
         print(report)
 
@@ -171,7 +177,7 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
         gradient_steps: int,
         save_every: int,
         eval_every: int,
-        n_eval_runs: int = 5,
+        n_eval_runs: int,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -202,15 +208,13 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
         )
 
     def collect_rollouts(self) -> None:
-        env = self.env 
+        env = self.env
         env.action_space.seed(self.seed)
+        env.observation_space.seed(self.seed)
         obs, _ = env.reset(seed=self.seed)
-        
-        for _ in range(self.buffer_start_size): 
-            # Exploration policy 
-            action = env.action_space.sample()
-            # action[1] = abs(action[1]) 
 
+        for _ in range(self.buffer_start_size): 
+            action = env.action_space.sample()
             obs_next, reward, terminated, truncated, _ = env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
             obs = obs_next
@@ -231,7 +235,7 @@ class OnPolicyAlgorithm(RLAlgorithm, ABC):
         epochs: int,
         save_every: int,
         eval_every: int,
-        n_eval_runs: int = 10,
+        n_eval_runs: int,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",

@@ -12,6 +12,7 @@ class EvluationStats:
     std_rewards_: List[float] = field(default_factory=list)
     
     average_speed_: List[float] = field(default_factory=list)
+    succesfull_laps_: List[int] = field(default_factory=list)
     
     average_distance_: List[float] = field(default_factory=list)
     min_distance_: List[float] = field(default_factory=list)
@@ -27,7 +28,8 @@ class EvluationStats:
             rewards: np.ndarray, 
             distance: np.ndarray, 
             time_alive: np.ndarray, 
-            mean_speed: np.ndarray, 
+            mean_speed: np.ndarray,
+            successful: np.ndarray
     ) -> None:
         average_return = float(np.mean(rewards).item())
         std_return = float(np.std(rewards).item())
@@ -56,6 +58,8 @@ class EvluationStats:
         self.min_time_alive_.append(min_time_alive)
         self.max_time_alive_.append(max_time_alive)
 
+        self.succesfull_laps_.append(int(np.sum(successful)))
+
     def to_csv(self, path: str) -> None:
         data = {
             "timesteps": self.steps_, 
@@ -72,6 +76,8 @@ class EvluationStats:
             "average_time_alive": self.average_time_alive_,
             "min_time_alive": self.min_time_alive_,
             "max_time_alive": self.max_time_alive_,
+            
+            "successful_laps": self.succesfull_laps_,
         }
         pd.DataFrame.from_dict(data).to_csv(path, index=False)
 
@@ -110,3 +116,7 @@ class EvluationStats:
     @property
     def last_max_time_alive(self) -> float:
         return self.max_time_alive_[-1]
+    
+    @property
+    def last_successful_laps(self) -> int:
+        return self.succesfull_laps_[-1]

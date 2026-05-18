@@ -9,5 +9,5 @@ class EnvConfig:
     port_val: int = 3002
 
     track_category: str = "road"
-    track_train: str = "street-1"
-    track_val: str = "ruudskogen"
+    track_train: str = "alpine-1"       # 3773.57 meters
+    track_val: str = "alpine-2"         # 6355.65  meters

@@ -11,17 +11,15 @@ DEFAULT_TORCS_LIB_DIRS = (
 )
 
 DEFAULT_SPEED = 50.0
-MAX_SPEED_X = 300.0
-MAX_SPEED_Y = 100.0
-MAX_SPEED_Z = 100.0
+MAX_SPEED = 300.0
 MAX_FOCUS = 200.0
 MAX_OPPONENTS = 200.0
 MAX_TRACK = 200.0
 MAX_RPM = 10000.0
 MAX_WHEEL_SPIN_VEL = 100.0
 
-TERMINAL_JUDGE_START = 500
-TERMINATION_LIMIT_PROGRESS = 5.0
+TERMINAL_JUDGE_START = 100          # If after 100 timesteps still no progress => terminate! (in timesteps [t])
+TERMINATION_LIMIT_PROGRESS = 5.0    # Episode terminates if agent is runnig slower than that (in [km/h])
 
 TRACK_SENSOR_ANGLES = (
     -45.0, -19.0, -12.0, -7.0, -4.0, -2.5, -1.7, -1.0, -0.5,

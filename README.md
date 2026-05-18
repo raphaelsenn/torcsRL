@@ -1,12 +1,17 @@
 # torcsRL
 
+There are already several open-source TORCS reinforcement learning projects, many of them are based on older codebases, use Keras or TensorFlow 1-style implementations, and mainly focus on DDPG with classical Ornstein-Uhlenbeck exploration noise.
+
+This repo provides a cleaner and more modern PyTorch-based implementation for training RL agents in TORCS. It uses a Gymnasium-compatible interface, supports configurable training and evaluation tracks, and includes modern actor-critic algorithms such as TD3, PPO, and SAC.
+
 ## Training and Evaluation
 
-| Purpose | Track | Preview |
-| --- | --- | --- |
-| Training | `street-1` | ![TORCS street-1 training track](./assets/torcs_street-1.png) |
-| Evaluation | `ruudskogen` | ![TORCS ruudskogen evaluation track](./assets/torcs_ruudskogen.png) |
+### Alpine Challange
 
+| Purpose | Track | Distance | Preview |
+| --- | --- | -- | --- |
+| Training | `Alpine 2` | 3773.57 meters  | ![TORCS alpine-2 training track](./assets/alpine-2.jpg) |
+| Evaluation | `Alpine 1` | 6355.65 meters | ![TORCS alpine-1 evaluation track](./assets/alpine-1.jpg) |
 
 ## Usage
 
@@ -24,13 +29,13 @@ cfg = EnvConfig(
     port_val = 3002
 
     track_category = "road"
-    track_train = "forza"
-    track_val = "ruudskogen"
+    track_train = "alpine-2"
+    track_val = "alpine-1"
 )
 
 alg = DDPG(
-    env_cfg,
-    lr_actor = 1e-3,
+    env_cfg = env_cfg,
+    lr_actor = 1e-3
     lr_critic = 1e-3,
     gamma = 0.99,
 )
@@ -88,7 +93,8 @@ sudo dnf install \
   automake \
   autoconf \
   libtool \
-  libXxf86vm-devel
+  libXxf86vm-devel \
+  xautomation
 ```
 
 4. Build and install TORCS:
@@ -107,27 +113,33 @@ sudo torcs
 
 ### Install `torcsrl`
 
-1. Create and activate a conda environment:
+1. Clone the repository:
+
+```bash
+git clone https://github.com/raphaelsenn/torcsrl
+```
+
+2. Enter the repository:
+
+```bash
+cd torcsrl
+```
+
+3. Create and activate a conda environment:
 
 ```bash
 conda create -n torcsrl python=3.11 -y
 conda activate torcsrl
 ```
 
-2. Clone the repository:
 
-```bash
-git clone https://github.com/raphaelsenn/torcsrl
-cd torcsrl
-```
-
-3. Install the Python requirements:
+4. Install the Python requirements:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Install `torcsrl` in editable mode:
+5. Install `torcsrl` in editable mode:
 
 ```bash
 pip install -e .

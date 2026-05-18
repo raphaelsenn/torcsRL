@@ -27,16 +27,16 @@ class TD3(OffPolicyAlgorithm):
         gamma: float = 0.99,
         tau_polyak: float = 0.005,
         buffer_size: int = 1_000_000,
-        buffer_start_size: int = 10_000,
+        buffer_start_size: int = 25_000,
         batch_size: int = 256,
         epsilon: float = 0.1,
         epsilon_tgt_net: float = 0.2,
         epsilon_clip: float = 0.5,
         gradient_steps: int = 1,
         policy_delay: int = 2,
-        save_every: int = 1_000,
-        eval_every: int = 1_000,
-        n_eval_runs: int = 5,
+        save_every: int = 5_000,
+        eval_every: int = 5_000,
+        n_eval_runs: int = 3,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -78,7 +78,8 @@ class TD3(OffPolicyAlgorithm):
         action = self.actor.act(obs)
 
         if deterministic is False:
-            action += self.epsilon * torch.randn_like(action)
+            noise = self.epsilon * torch.randn_like(action) 
+            action = action + noise
 
         return action
 
@@ -101,11 +102,11 @@ class TD3(OffPolicyAlgorithm):
                 # Target policy smoothing
                 noise = self.epsilon_tgt_net * torch.randn_like(action) 
                 noise_tgt = noise.clip(-self.epsilon_clip, self.epsilon_clip)
-                action_pi_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt
+                action_pi_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt               # Target network
 
                 # Clipped double Q-learning
-                q1_tgt_next, q2_tgt_next = self.critic_tgt(obs_next, action_pi_tgt_next)
-                q_tgt_next = torch.min(q1_tgt_next, q2_tgt_next).view(-1) 
+                q1_tgt_next, q2_tgt_next = self.critic_tgt(obs_next, action_pi_tgt_next)    # Target network
+                q_tgt_next = torch.min(q1_tgt_next, q2_tgt_next).view(-1)
 
                 # 1-step TD target 
                 td_target = reward
@@ -166,18 +167,16 @@ class TD3(OffPolicyAlgorithm):
                     self.print_stats(step, episode)
 
             if step % self.save_every == 0:
-                self.save()
+                self.save(step)
 
-        self.evaluate(n_timesteps)
-        self.save()
         self.env.close()
 
-    def save(self) -> None:
+    def save(self, step: int) -> None:
         algo_name = self.__class__.__name__.lower()
         run_name = f"{algo_name}-lr_pi{self.lr_actor}-lr_q{self.lr_critic}-seed{self.seed}"
         save_dir = os.path.join("checkpoints", algo_name, run_name)
         os.makedirs(save_dir, exist_ok=True)
 
-        torch.save(self.actor.state_dict(), os.path.join(save_dir, "actor.pt"))
+        torch.save(self.actor.state_dict(), os.path.join(save_dir, f"actor_{step}.pt"))
         torch.save(self.critic.state_dict(), os.path.join(save_dir, "critic.pt"))
         self.eval_stats.to_csv(os.path.join(save_dir, "eval_stats.csv"))

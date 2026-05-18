@@ -80,7 +80,7 @@ class TorcsClient:
         port: int = 3001,
         client_id: str = "SCR",
         timeout: float = 2.0,
-        connect_attempts: int = 60,
+        connect_attempts: int = 120,
     ) -> None:
         self.host = host
         self.port = port

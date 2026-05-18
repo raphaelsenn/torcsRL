@@ -11,10 +11,7 @@ from gym_torcs.client import TorcsClient
 from gym_torcs.constants import (
     DEFAULT_SPEED,
     DEFAULT_TORCS_EXECUTABLE,
-    MAX_FOCUS,
-    MAX_SPEED_X,
-    MAX_SPEED_Y,
-    MAX_SPEED_Z,
+    MAX_SPEED,
     MAX_TRACK,
     MAX_RPM,
     MAX_WHEEL_SPIN_VEL,
@@ -239,7 +236,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
 
         if template_xml is None and template_practice_xml is not None:
             template_xml = template_practice_xml
-        print("HELLO")
+        
         self.race_config = RaceConfig(
             race_type=race_type,
             track_name=track_name,
@@ -346,8 +343,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             raise RuntimeError("Call reset() before step().")
 
         action = np.asarray(action, dtype=np.float32)
-        # noise = np.random.normal(0.0, 0.005, size=action.shape).astype(np.float32) 
-        # action = (action + noise).clip(self.action_space.low, self.action_space.high)
+        action = action.clip(-1.0, 1.0)
 
         prev = dict(self.client.state.data)
         self._apply_action(action)
@@ -356,8 +352,8 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
 
         reward = self._reward(raw, prev, action)
 
-        terminated = self._terminated(raw, reward)
-        truncated = self.time_step >= self.max_episode_steps
+        terminated = self._terminated(raw, prev)
+        truncated = self._truncated(raw)
         info = self._info(raw)
 
         self.time_step += 1
@@ -392,13 +388,14 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             if state["speedX"] < 10.0:
                 cmd.accel += 1.0 / (state["speedX"] + 0.1)
 
-        cmd.gear = self._gear(float(state["speedX"]))
+        cmd.gear = self._automatic_gear(int(state["gear"]), float(state["rpm"]))
+        # cmd.gear = self._gear(float(state["speedX"]))
 
     def _obs(self, raw: dict[str, Any]) -> np.ndarray:
         speed = np.asarray([
-            raw["speedX"] / MAX_SPEED_X, 
-            raw["speedY"] / MAX_SPEED_Y, 
-            raw["speedZ"] / MAX_SPEED_Z
+            raw["speedX"] / MAX_SPEED, 
+            raw["speedY"] / MAX_SPEED, 
+            raw["speedZ"] / MAX_SPEED
         ], dtype=np.float32)
         
         rpm = np.asarray([raw["rpm"]], dtype=np.float32) / MAX_RPM
@@ -407,44 +404,58 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         wheel_spin = np.asarray(raw["wheelSpinVel"], dtype=np.float32) / MAX_WHEEL_SPIN_VEL
         
         track = np.asarray(raw["track"], dtype=np.float32) / MAX_TRACK
-        track = track + np.random.normal(0.0, 0.1, size=track.shape).astype(np.float32)
+        track = track + np.random.normal(0.0, 0.005, size=track.shape).astype(np.float32)
+        track = track.clip(0.0, 1.0)
 
         obs = np.concatenate([speed, rpm, angle, track_pos, track, wheel_spin]).astype(np.float32)
 
         return obs
 
     def _reward(self, obs: dict[str, Any], prev: dict[str, Any], action: np.ndarray) -> float:
-        speed = float(obs["speedX"])
+        speed = float(obs["speedX"]) / MAX_SPEED
         angle = float(obs["angle"])
+        trackPos = float(obs["trackPos"])
         track = np.asarray(obs["track"], dtype=np.float32)
+        steering = float(action[0])
 
         # Forward progress aligned with road direction
-        progress = speed * np.cos(angle) - np.abs(speed * np.sin(angle))
+        reward = speed * np.cos(angle) - abs(speed * np.sin(angle)) - speed * abs(trackPos)
 
-        # Collision penalty
-        collision_penalty = 0.0
-        if float(obs.get("damage", 0.0)) - float(prev.get("damage", 0.0)) > 0.0: 
-            collision_penalty += 1.0
+        # Small steering regularization
+        reward -= 0.1 * steering**2
+
+        # Collision
+        if float(obs["damage"]) - float(prev["damage"]) > 0.0:
+            reward -= 1.0
 
         # Off-track
-        off_track_penalty = 0.0
-        if track.min() < 0.0:
-            off_track_penalty += 1.0
+        if track.min() < 0.0 or abs(trackPos) > 1.0:
+            reward -= 1.0
 
-        reward = 0.01 * progress - collision_penalty - off_track_penalty
+        return float(reward)
 
-        return reward
-
-    def _terminated(self, obs: dict[str, Any], reward: float) -> bool:
-        if np.asarray(obs["track"], dtype=np.float32).min() < 0.0:
+    def _terminated(self, obs: dict[str, Any], prev: dict[str, Any]) -> bool:
+        speed = float(obs["speedX"])
+        angle = float(obs["angle"])
+        trackPos = float(obs["trackPos"])
+        track = np.asarray(obs["track"], dtype=np.float32)
+        progress = speed * np.cos(angle)
+        if track.min() < 0.0 or abs(trackPos) > 1.0:
             return True
-        if self.time_step > TERMINAL_JUDGE_START and reward < TERMINATION_LIMIT_PROGRESS:
+        if self.time_step > TERMINAL_JUDGE_START and progress < TERMINATION_LIMIT_PROGRESS:
             return True
         if np.cos(float(obs["angle"])) < 0.0:
             return True
-        # NOTE: Terminating after one successful lap 
+        if float(obs["damage"]) - float(prev["damage"]) > 0.0: 
+            return True
+        return False
+    
+    def _truncated(self, obs: dict[str, Any]) -> bool:
+        # Truncate after one successful lap
         if float(obs["lastLapTime"]) > 0.0:
             return True
+        if self.time_step >= self.max_episode_steps:
+            return True 
         return False
 
     def _info(self, obs: dict[str, Any]) -> dict[str, Any]:
@@ -470,3 +481,16 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         if speed_x > 50.0:
             return 2
         return 1
+
+    @staticmethod
+    def _automatic_gear(gear: int, rpm: float) -> int:
+        if gear < 1:
+            return 1
+
+        if rpm > 8000.0 and gear < 6:
+            return gear + 1
+
+        if rpm < 3500.0 and gear > 1:
+            return gear - 1
+
+        return gear

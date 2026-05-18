@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 import torch
 import torch.nn.functional as F
 
@@ -26,14 +27,14 @@ class DDPG(OffPolicyAlgorithm):
         gamma: float = 0.99,
         tau_polyak: float = 0.001,
         buffer_size: int = 1_000_000,
-        buffer_start_size: int = 10_000,
-        batch_size: int = 32,
-        epsilon_start: float = 0.1,
-        epsilon_min: float = 0.05,
+        buffer_start_size: int = 25_000,
+        batch_size: int = 64,
+        epsilon: float = 0.1,
         gradient_steps: int = 1,
+        policy_delay: int = 2,
         save_every: int = 5_000,
         eval_every: int = 5_000,
-        n_eval_runs: int = 5,
+        n_eval_runs: int = 3,
         verbose: bool = True,
         seed: int = 0,
         device: str = "cpu",
@@ -56,9 +57,8 @@ class DDPG(OffPolicyAlgorithm):
 
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
-        self.epsilon = epsilon_start
-        self.epsilon_start = epsilon_start 
-        self.epsilon_min = epsilon_min
+        self.epsilon = epsilon
+        self.policy_delay = policy_delay
 
         self.actor = ActorMLP(self.obs_dim, self.action_dim).to(self.device)
         self.actor_tgt = copy.deepcopy(self.actor)
@@ -71,9 +71,10 @@ class DDPG(OffPolicyAlgorithm):
 
     def act(self, obs: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
         action = self.actor.act(obs)
-
+        
         if deterministic is False:
-            action += self.epsilon * torch.randn_like(action)
+            noise = self.epsilon * torch.randn_like(action)
+            action = (action + noise).clip(self.action_low_torch, self.action_high_torch)
 
         return action
 
@@ -87,14 +88,14 @@ class DDPG(OffPolicyAlgorithm):
         for theta, theta_tgt in params:
             theta_tgt.data.copy_(self.tau_polyak * theta.data + (1.0 - self.tau_polyak) * theta_tgt.data) 
 
-    def n_gradient_steps(self) -> None:
+    def n_gradient_steps(self, step: int) -> None:
         for _ in range(self.gradient_steps):
             obs, action, reward, obs_next, done = self.replay_buffer.sample()
             
             # =============== Compute targets for Q function ==================
             with torch.no_grad():
-                action_pi_tgt_next = self.actor_tgt.act(obs_next)
-                q_tgt_next = self.critic_tgt(obs_next, action_pi_tgt_next).view(-1)
+                action_pi_tgt_next = self.actor_tgt.act(obs_next)                       # Target network
+                q_tgt_next = self.critic_tgt(obs_next, action_pi_tgt_next).view(-1)     # Target network
                 td_target = reward
                 td_target += self.gamma * (1.0 - done) * q_tgt_next
             
@@ -107,36 +108,40 @@ class DDPG(OffPolicyAlgorithm):
             self.optimizer_critic.step()
 
             # ========================= Update policy =========================
-            # Freeze params of Q-function (save computational effort) 
-            for p in self.critic.parameters():
-                p.requires_grad = False 
             
-            action_pi = self.act(obs, deterministic=True)
-            q = self.critic(obs, action_pi).view(-1)
-            loss_pi = torch.mean(-q)
+            # NOTE: Policy delay is not part of the original DDPG algorithm,
+            # however, it really stabilizes training ;) (deactivate using policy_delay = 1)
+            if step % self.policy_delay == 0:
+                # Freeze params of Q-function (save computational effort) 
+                for p in self.critic.parameters():
+                    p.requires_grad = False 
+                
+                action_pi = self.act(obs, deterministic=True)
+                q = self.critic(obs, action_pi).view(-1)
+                loss_pi = torch.mean(-q)
 
-            self.optimizer_actor.zero_grad()
-            loss_pi.backward()
-            self.optimizer_actor.step()
+                self.optimizer_actor.zero_grad()
+                loss_pi.backward()
+                self.optimizer_actor.step()
 
-            for p in self.critic.parameters():
-                p.requires_grad = True
+                for p in self.critic.parameters():
+                    p.requires_grad = True
 
             # ==================== Update target networks =====================
-            self.update_target_networks()
+                self.update_target_networks()
 
     def train(self, n_timesteps: int) -> None:
         self.collect_rollouts()
 
         obs, _ = self.env.reset()
         episode = 0
+        start_time = time.monotonic()
 
         for step in range(1, n_timesteps + 1):
             action = self.act_numpy(obs, deterministic=False)
             obs_next, reward, terminated, truncated, _ = self.env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
-            self.n_gradient_steps()
-            # self.decay_epsilon(step, n_timesteps) 
+            self.n_gradient_steps(step)
             obs = obs_next
 
             if terminated or truncated:
@@ -145,26 +150,22 @@ class DDPG(OffPolicyAlgorithm):
 
             if step % self.eval_every == 0:
                 self.evaluate(step)
+                end_time = time.monotonic() - start_time
+                start_time = time.monotonic()
                 if self.verbose:
-                    self.print_stats(step, episode)
+                    self.print_stats(step, episode, end_time)
 
             if step % self.save_every == 0:
-                self.save()
+                self.save(step)
 
-        self.evaluate(n_timesteps)
-        self.save()
         self.env.close()
 
-    def decay_epsilon(self, step: int, T: int) -> None:
-        frac = min(step / T, 1.0)
-        self.epsilon = self.epsilon_start + frac * (self.epsilon_min - self.epsilon_start)
-
-    def save(self) -> None:
+    def save(self, step: int) -> None:
         algo_name = self.__class__.__name__.lower()
         run_name = f"{algo_name}-lr_pi{self.lr_actor}-lr_q{self.lr_critic}-seed{self.seed}"
         save_dir = os.path.join("checkpoints", algo_name, run_name)
         os.makedirs(save_dir, exist_ok=True)
 
-        torch.save(self.actor.state_dict(), os.path.join(save_dir, "actor.pt"))
+        torch.save(self.actor.state_dict(), os.path.join(save_dir, f"actor-{step}.pt"))
         torch.save(self.critic.state_dict(), os.path.join(save_dir, "critic.pt"))
         self.eval_stats.to_csv(os.path.join(save_dir, "eval_stats.csv"))

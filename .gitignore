@@ -222,3 +222,6 @@ __marimo__/
 
 *.pt
 checkpoints
+test.py
+main.py
+plots.ipynb
