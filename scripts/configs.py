@@ -13,8 +13,8 @@ DDPG_CONFIG = {
 
 
 TD3_CONFIG = {
-    "lr_actor": 0.0001,
-    "lr_critic": 0.0001,
+    "lr_actor": 0.0003,
+    "lr_critic": 0.0003,
     "buffer_size": 1_000_000,
     "buffer_start_size": 25_000,
     "batch_size": 256,

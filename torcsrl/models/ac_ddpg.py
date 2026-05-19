@@ -31,25 +31,11 @@ class ActorMLP(Actor):
             nn.Tanh()
         )
 
-        # self._init_weights()
-
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         return self.mlp(obs)
 
     def act(self, obs: torch.Tensor) -> torch.Tensor:
         return self(obs)
-
-    def _init_weights(self) -> None:
-        # Read more here in appendix: https://arxiv.org/abs/1509.02971 
-        layers = [m for m in self.mlp if isinstance(m, nn.Linear)] 
-        
-        for layer in layers[:-1]:
-            nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
-            nn.init.zeros_(layer.bias)
-        
-        out = layers[-1]
-        nn.init.uniform_(out.weight, -3e-3, 3e-3)
-        nn.init.uniform_(out.bias, -3e-3, 3e-3)
 
 
 class CriticMLP(Critic):
@@ -78,23 +64,9 @@ class CriticMLP(Critic):
             nn.Linear(h2_dim, 1),
         )
 
-        # self._init_weights()
-
     def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         x = torch.cat([obs, action], dim=-1)
         return self.mlp(x)
 
     def q(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         return self.forward(obs, action)
-
-    def _init_weights(self) -> None:
-        # Read more here in appendix: https://arxiv.org/abs/1509.02971 
-        layers = [m for m in self.mlp if isinstance(m, nn.Linear)]
-
-        for layer in layers[:-1]:
-            nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
-            nn.init.zeros_(layer.bias)
-
-        out = layers[-1]
-        nn.init.uniform_(out.weight, -3e-4, 3e-4)
-        nn.init.uniform_(out.bias, -3e-4, 3e-4)

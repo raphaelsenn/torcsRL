@@ -6,12 +6,30 @@ This repo provides a cleaner and more modern PyTorch-based implementation for tr
 
 ## Training and Evaluation
 
-### Alpine Challange
+### Alpine Challenge
 
-| Purpose | Track | Distance | Preview |
-| --- | --- | -- | --- |
-| Training | `Alpine 2` | 3773.57 meters  | ![TORCS alpine-2 training track](./assets/alpine-2.jpg) |
-| Evaluation | `Alpine 1` | 6355.65 meters | ![TORCS alpine-1 evaluation track](./assets/alpine-1.jpg) |
+The Alpine challenge uses two visually similar, but geometrically different, TORCS road tracks.
+The agent is trained on `alpine-1` and evaluated on the unseen `alpine-2` track to test generalization.
+
+| Split | Track | Distance | Preview |
+| --- | --- | ---: | --- |
+| Training | `alpine-1` | 6355.65 m | <img src="./assets/alpine-1.jpg" width="280"> |
+| Evaluation | `alpine-2` | 3773.57 m | <img src="./assets/alpine-2.jpg" width="280"> |
+
+<p align="center">
+  <img src="./assets/alpine_learning_curve.png">
+</p>
+
+<p align="center">
+  <em>Average return on the evaluation track <code>alpine-2</code>, evaluated every 5,000 training steps (averaged over 3 seeds).</em>
+</p>
+
+#### Hyperparameters
+
+| Algorithm | Timesteps | Actor LR | Critic LR | Batch size | Buffer size | Start steps | Discount | Polyak τ | Policy delay | Exploration |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| DDPG | 1,000,000 | 3e-4 | 3e-4 | 256 | 1,000,000 | 25,000 | 0.99 | 0.005 | — | Gaussian, σ = 0.1 |
+| TD3 | 1,000,000 | 3e-4 | 3e-4 | 256 | 1,000,000 | 25,000 | 0.99 | 0.005 | 2 | Gaussian, σ = 0.1 |
 
 ## Usage
 
@@ -19,7 +37,7 @@ This repo provides a cleaner and more modern PyTorch-based implementation for tr
 import gymnasium as gym
 import gym_torcs
 
-from torcsrl import EnvConfig, DDPG
+from torcsrl import EnvConfig, TD3
 
 
 cfg = EnvConfig(
@@ -29,27 +47,18 @@ cfg = EnvConfig(
     port_val = 3002
 
     track_category = "road"
-    track_train = "alpine-2"
-    track_val = "alpine-1"
+    track_train = "alpine-1"
+    track_val = "alpine-2"
 )
 
-alg = DDPG(
+alg = TD3(
     env_cfg = env_cfg,
-    lr_actor = 1e-3
-    lr_critic = 1e-3,
-    gamma = 0.99,
+    lr_actor = 3e-4
+    lr_critic = 3e-4,
 )
 
 alg.train(n_timesteps = 1_000_000)
 ```
-
-## Hyperparameters
-
-| Algorithm | Timesteps | Learning rate actor | Learning rate critic | Policy delay | Batch size | Replay buffer size | Start steps | Gamma | Polyak tau | Exploration noise |
-| --------- | --------- | ------------------- | -------------------- | ------------ | ---------- | ------------------ | ----------- | ----- | ---------- | ----------------- |
-| DDPG | 1,000,000 | 1e-4 | 1e-3 | – | 64 | 1,000,000 | 25,000 | 0.99 | 0.001 | Gaussian, $\sigma$ = 0.1 | 
-| TD3 | 1,000,000 | 1e-4 | 1e-3 | 2 | 256 | 1,000,000 | 25,000 | 0.99 | 0.005 | Gaussian, $\sigma$ = 0.1 |
-
 
 ## Install
 
