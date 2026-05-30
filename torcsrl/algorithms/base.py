@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 
+import random
 import torch
 import numpy as np
 import gymnasium as gym
 
-from torcsrl.config import EnvConfig
 from torcsrl.models.base import Actor, Critic
 from torcsrl.evaluation.evaluation_stats import EvluationStats
 from torcsrl.buffers.replay_buffer import ReplayBuffer
@@ -15,7 +15,8 @@ from torcsrl.utils.utils import to_batched_tensor
 class RLAlgorithm(ABC):
     def __init__(
         self,
-        env_cfg: EnvConfig,
+        train_env: gym.Env,
+        val_env: gym.Env,
         *,
         gamma: float,
         tau_polyak: float,
@@ -29,26 +30,8 @@ class RLAlgorithm(ABC):
         ...
         super().__init__()
 
-        self.env_cfg = env_cfg
-        self.env = gym.make(
-            "TorcsSCR-v0",
-            render_mode=None,
-            executable=env_cfg.executable,
-            port=env_cfg.port_train,
-            track_name=env_cfg.track_train,
-            track_category=env_cfg.track_category,
-            debug=False,
-        )
-
-        self.val_env = gym.make(
-            "TorcsSCR-v0",
-            render_mode=None,
-            executable=self.env_cfg.executable,
-            port=self.env_cfg.port_val,
-            track_name=self.env_cfg.track_val,
-            track_category=self.env_cfg.track_category,
-            debug=False,
-        )
+        self.env = train_env
+        self.val_env = val_env
 
         assert device in {"cpu", "cuda", "mps"}, (
             f"Unkdown device, expected device in [`cpu`, `cuda`, `mps`], got: {device}."
@@ -76,11 +59,13 @@ class RLAlgorithm(ABC):
         self.gamma = gamma
         self.tau_polyak = tau_polyak
         self.verbose = verbose
-        self.seed = seed
         self.save_every = save_every
         self.eval_every = eval_every 
         self.n_eval_runs = n_eval_runs
         self.eval_stats = EvluationStats()
+
+        self.seed = seed 
+        self.torch_rng = torch.Generator(device=self.device)
         self.set_seeds()
 
     @abstractmethod
@@ -108,47 +93,64 @@ class RLAlgorithm(ABC):
 
     @torch.no_grad()
     def evaluate(self, step: int) -> None:
-        env = self.val_env 
-        
-        rewards = np.zeros(self.n_eval_runs)
-        distance = np.zeros(self.n_eval_runs)
-        time_alive = np.zeros(self.n_eval_runs)
-        mean_speed = np.zeros(self.n_eval_runs)
+        env = self.val_env
+
+        rewards = np.zeros(self.n_eval_runs, dtype=np.float32)
+        distance = np.zeros(self.n_eval_runs, dtype=np.float32)
+        time_alive = np.zeros(self.n_eval_runs, dtype=np.float32)
+        mean_speed = np.zeros(self.n_eval_runs, dtype=np.float32)
         successful = np.zeros(self.n_eval_runs, dtype=np.uint8)
+        damage = np.zeros(self.n_eval_runs, dtype=np.float32)
 
         for episode in range(self.n_eval_runs):
-            obs, _ = env.reset(seed=self.seed + episode + 1)
-            env.action_space.seed(self.seed + episode + 1) 
+            eval_seed = self.seed + episode + 1
+            obs, _ = env.reset(seed=eval_seed)
+
             done = False
-            env_step = 0
+            n_steps = 0
+            speed_sum = 0.0
+            episode_reward = 0.0
+            last_info = {}
 
             while not done:
                 action = self.act_numpy(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
-                done = terminated or truncated 
 
-                env_step += 1 
-                rewards[episode] += reward
-                mean_speed[episode] += (info["speedX"] - mean_speed[episode]) / env_step
+                done = terminated or truncated
+                n_steps += 1
 
-                if done:
-                    time_alive[episode] = info["timeAlive"]
-                    distance[episode] = info["distRaced"]
-                    successful[episode] = int(info["successfulLap"])
+                episode_reward += reward
+                speed_sum += float(info.get("speedX", 0.0))
+                last_info = info
+
+            rewards[episode] = episode_reward
+            mean_speed[episode] = speed_sum / max(n_steps, 1)
+
+            distance[episode] = float(last_info.get("distRaced", 0.0))
+            time_alive[episode] = float(last_info.get("timeAlive", 0.0))
+            successful[episode] = int(last_info.get("successfulLap", False))
+            damage[episode] = float(last_info.get("damage", 0.0))
 
         self.eval_stats.update(
-            step=step, 
-            rewards=rewards, 
-            distance=distance, 
-            time_alive=time_alive, 
+            step=step,
+            rewards=rewards,
+            distance=distance,
+            time_alive=time_alive,
             mean_speed=mean_speed,
-            successful=successful
+            successful=successful,
+            damage=damage,
         )
-        env.close()
 
     def set_seeds(self) -> None:
+        random.seed(self.seed)
         np.random.seed(self.seed)
+
+        self.torch_rng.manual_seed(self.seed)
         torch.manual_seed(self.seed)
+        torch.cuda.manual_seed_all(self.seed)
+
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     def print_stats(self, step: int, episode: int, time: float) -> None:
         report = (
@@ -158,7 +160,8 @@ class RLAlgorithm(ABC):
             f"Std Return: {self.eval_stats.last_std_reward:>12.4f}  "
             f"Average Distance: {self.eval_stats.last_average_distance:>12.4f}  "
             f"Average Speed: {self.eval_stats.last_average_speed:>12.4f}  "
-            f"Successful Laps: {self.eval_stats.last_successful_laps:>2d}\{self.n_eval_runs}  "
+            f"Average Damage: {self.eval_stats.last_average_damage:>12.4f}  "
+            f"Successful Laps: {self.eval_stats.last_successful_laps:>2d}/{self.n_eval_runs}  "
             f"Time: {time:>12.2f}s  "
         )
         print(report)
@@ -167,7 +170,8 @@ class RLAlgorithm(ABC):
 class OffPolicyAlgorithm(RLAlgorithm, ABC):
     def __init__(
         self,
-        env_cfg: EnvConfig,
+        train_env: gym.Env,
+        val_env: gym.Env, 
         *,
         gamma: float,
         tau_polyak: float,
@@ -183,7 +187,8 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
         device: str = "cpu",
     ) -> None:
         super().__init__(
-            env_cfg=env_cfg,
+            train_env=train_env,
+            val_env=val_env, 
             gamma=gamma,
             tau_polyak=tau_polyak,
             save_every=save_every,
@@ -207,26 +212,35 @@ class OffPolicyAlgorithm(RLAlgorithm, ABC):
             device=device,
         )
 
-    def collect_rollouts(self) -> None:
+    def collect_rollouts(self) -> np.ndarray:
         env = self.env
-        env.action_space.seed(self.seed)
-        env.observation_space.seed(self.seed)
-        obs, _ = env.reset(seed=self.seed)
 
+        # This is ugly, but it works great... 
+        if hasattr(env, "switch_every_steps") and hasattr(env, "tracks"):
+            switch_every_steps = env.switch_every_steps
+            n_tracks = len(env.tracks)
+            env.switch_every_steps = int(self.buffer_start_size // n_tracks)
+       
+        env.action_space.seed(self.seed)
+        obs, _ = env.reset(seed=self.seed)
         for _ in range(self.buffer_start_size): 
             action = env.action_space.sample()
             obs_next, reward, terminated, truncated, _ = env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
             obs = obs_next
-
             if terminated or truncated:
                 obs, _ = env.reset()
+        
+        if hasattr(env, "switch_every_steps") and hasattr(env, "tracks"):
+            env.switch_every_steps = switch_every_steps
 
+        return obs
 
 class OnPolicyAlgorithm(RLAlgorithm, ABC):
     def __init__(
         self,
-        env_cfg: EnvConfig,
+        train_env: gym.Env,
+        val_env: gym.Env, 
         *,
         gamma: float,
         tau_polyak: float,
@@ -241,7 +255,8 @@ class OnPolicyAlgorithm(RLAlgorithm, ABC):
         device: str = "cpu",
     ) -> None:
         super().__init__(
-            env_cfg=env_cfg,
+            train_env=train_env,
+            val_env=val_env,  
             gamma=gamma,
             tau_polyak=tau_polyak,
             save_every=save_every,

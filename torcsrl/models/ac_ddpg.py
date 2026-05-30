@@ -9,8 +9,8 @@ class ActorMLP(Actor):
         self, 
         obs_dim: int, 
         action_dim: int,
-        h1_dim: int = 256,
-        h2_dim: int = 256,
+        h1_dim: int = 512,
+        h2_dim: int = 512,
     ) -> None:
         super().__init__(obs_dim, action_dim)
 
@@ -18,15 +18,12 @@ class ActorMLP(Actor):
         self.h2_dim = h2_dim
         
         self.mlp = nn.Sequential(
-            # [B, obs_dim] -> [B, h1_dim] 
             nn.Linear(obs_dim, h1_dim),
             nn.ReLU(True),
 
-            # [B, h1_dim] -> [B, h2_dim] 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-        
-            # [B, h2_dim] -> [B, action_dim] 
+            
             nn.Linear(h2_dim, action_dim),
             nn.Tanh()
         )
@@ -43,8 +40,8 @@ class CriticMLP(Critic):
         self, 
         obs_dim: int, 
         action_dim: int,
-        h1_dim: int = 256,
-        h2_dim: int = 256,
+        h1_dim: int = 512,
+        h2_dim: int = 512,
     ) -> None:
         super().__init__(obs_dim, action_dim)
 
@@ -52,15 +49,12 @@ class CriticMLP(Critic):
         self.h2_dim = h2_dim
 
         self.mlp = nn.Sequential(
-            # [B, obs_dim + action_dim] -> [B, h1_dim]
             nn.Linear(obs_dim + action_dim, h1_dim),
             nn.ReLU(True),
 
-            # [B, h1_dim] -> [B, h2_dim]
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-
-            # [B, h2_dim] -> [B, 1]
+            
             nn.Linear(h2_dim, 1),
         )
 

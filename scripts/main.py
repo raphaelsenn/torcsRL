@@ -4,7 +4,6 @@ import torch
 import numpy as np
 
 from torcsrl.algorithms.base import RLAlgorithm
-from torcsrl.config import EnvConfig
 from torcsrl import DDPG, TD3
 from configs import DDPG_CONFIG, TD3_CONFIG
 

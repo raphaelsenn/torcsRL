@@ -21,6 +21,8 @@ class EvluationStats:
     average_time_alive_: List[float] = field(default_factory=list)
     min_time_alive_: List[float] = field(default_factory=list)
     max_time_alive_: List[float] = field(default_factory=list)
+    
+    average_damage_: List[float] = field(default_factory=list)
 
     def update(
             self, 
@@ -29,7 +31,8 @@ class EvluationStats:
             distance: np.ndarray, 
             time_alive: np.ndarray, 
             mean_speed: np.ndarray,
-            successful: np.ndarray
+            successful: np.ndarray,
+            damage: np.ndarray
     ) -> None:
         average_return = float(np.mean(rewards).item())
         std_return = float(np.std(rewards).item())
@@ -59,6 +62,8 @@ class EvluationStats:
         self.max_time_alive_.append(max_time_alive)
 
         self.succesfull_laps_.append(int(np.sum(successful)))
+        
+        self.average_damage_.append(np.mean(damage))
 
     def to_csv(self, path: str) -> None:
         data = {
@@ -120,3 +125,7 @@ class EvluationStats:
     @property
     def last_successful_laps(self) -> int:
         return self.succesfull_laps_[-1]
+    
+    @property
+    def last_average_damage(self) -> int:
+        return self.average_damage_[-1]

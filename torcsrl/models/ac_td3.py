@@ -18,15 +18,12 @@ class ActorMLP(Actor):
         self.h2_dim = h2_dim
         
         self.mlp = nn.Sequential(
-            # [B, obs_dim] -> [B, h1_dim] 
             nn.Linear(obs_dim, h1_dim),
             nn.ReLU(True),
 
-            # [B, h1_dim] -> [B, h2_dim] 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
         
-            # [B, h2_dim] -> [B, action_dim] 
             nn.Linear(h2_dim, action_dim),
             nn.Tanh()
         )
@@ -53,28 +50,22 @@ class CriticMLP(Critic):
         self.h2_dim = h2_dim
 
         self.Q1 = nn.Sequential(
-            # [B, obs_dim + action_dim] -> [B, h1_dim] 
             nn.Linear(obs_dim + action_dim, h1_dim),
             nn.ReLU(True),
         
-            # [B, h1_dim] -> [B, h2_dim] 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
         
-            # [B, h2_dim] -> [B, 1] 
             nn.Linear(h2_dim, 1)
         )
 
         self.Q2 = nn.Sequential(
-            # [B, obs_dim + action_dim] -> [B, h1_dim] 
             nn.Linear(obs_dim + action_dim, h1_dim),
             nn.ReLU(True),
         
-            # [B, h1_dim] -> [B, h2_dim] 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
         
-            # [B, h2_dim] -> [B, 1] 
             nn.Linear(h2_dim, 1)
         )
 
@@ -91,4 +82,4 @@ class CriticMLP(Critic):
     
     def q2(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         cat = torch.cat([obs, action], dim=-1) 
-        return self.Q1(cat)
+        return self.Q2(cat)

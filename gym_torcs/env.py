@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import gymnasium as gym
@@ -9,7 +8,6 @@ from gymnasium import spaces
 
 from gym_torcs.client import TorcsClient
 from gym_torcs.constants import (
-    DEFAULT_SPEED,
     DEFAULT_TORCS_EXECUTABLE,
     MAX_SPEED,
     MAX_TRACK,
@@ -18,7 +16,8 @@ from gym_torcs.constants import (
     TERMINAL_JUDGE_START,
     TERMINATION_LIMIT_PROGRESS,
 )
-from .server import RaceConfig, TorcsServer, scr_idx_from_port
+from gym_torcs.server import RaceConfig, TorcsServer, scr_idx_from_port
+from gym_torcs.racing_line import RacingLine
 
 
 class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
@@ -38,9 +37,10 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         laps: int = 20,
         template_xml: str | None = None,
         template_practice_xml: str | None = None,  # backwards-compatible alias
-        throttle: bool = True,
-        max_episode_steps: int = 100_000,
+        racing_line_csv: str | None = None, 
+        max_episode_steps: int = 25_000,
         reset_strategy: str = "relaunch",
+        observation_noise : bool = True, 
         auto_start_server: bool = True,
         startup_sleep: float = 1.0,
         client_connect_attempts: int | None = None,
@@ -114,17 +114,6 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         template_practice_xml : str | None, default=None
             Backwards-compatible alias for `template_xml`. Prefer using
             `template_xml` in new code.
-
-        throttle : bool, default=True
-            Whether the agent controls throttle.
-
-            - True:
-                Action space is usually two-dimensional:
-                `[steer, throttle_or_brake]`.
-            - False:
-                Action space is usually one-dimensional:
-                `[steer]`, while the environment applies a simple automatic
-                throttle controller.
 
         max_episode_steps : int, default=100_000
             Maximum number of environment steps before the episode is
@@ -220,8 +209,8 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.scr_idx = scr_idx_from_port(self.port)
         self.host = host
         self.client_id = client_id
-        self.throttle = throttle
         self.max_episode_steps = max_episode_steps
+        self.observation_noise = observation_noise 
         if reset_strategy not in {"relaunch", "meta"}:
             raise ValueError("reset_strategy must be 'relaunch' or 'meta'.")
         self.reset_strategy = reset_strategy
@@ -230,9 +219,11 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.client_connect_attempts = client_connect_attempts
         self.time_step = 0
 
-        action_dim = 2 if throttle else 1
+        action_dim = 2  # [steering, throttle]
         self.action_space = spaces.Box(-1.0, 1.0, shape=(action_dim,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(29,), dtype=np.float32)
+        
+        obs_dim = 29
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if template_xml is None and template_practice_xml is not None:
             template_xml = template_practice_xml
@@ -259,76 +250,96 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         )
         self.client: TorcsClient | None = None
         self._started_once = False
+        self.racing_line = RacingLine.from_csv(racing_line_csv) if racing_line_csv is not None else None
 
-    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
-        options = options or {}
-        # First reset must start TORCS. Subsequent resets should NOT use the
-        # SCR internal meta restart by default: on some TORCS/SCR builds that
-        # prints "******* RESTARTING *****" and then segfaults torcs-bin.
-        # The stable default is to terminate only our owned process and launch
-        # a fresh TORCS process for the next episode.
-        relaunch = bool(options.get("relaunch", not self._started_once))
-        if self._started_once and self.reset_strategy == "relaunch":
-            relaunch = True
+        options = dict(options or {})
+
+        # 1. Build the next race config first.
+        next_race_config = self.race_config
 
         if "track" in options:
             track = options["track"]
-            self.race_config = RaceConfig(
+            next_race_config = RaceConfig(
                 race_type=str(options.get("race_type", self.race_config.race_type)),
-                track_name=track["name"],
-                track_category=track["category"],
+                track_name=str(track["name"]),
+                track_category=str(track["category"]),
                 laps=int(options.get("laps", self.race_config.laps)),
                 scr_idx=self.scr_idx,
             )
-            relaunch = True
+
         elif {"race_type", "track_name", "track_category", "laps"} & set(options):
-            self.race_config = RaceConfig(
+            next_race_config = RaceConfig(
                 race_type=str(options.get("race_type", self.race_config.race_type)),
                 track_name=str(options.get("track_name", self.race_config.track_name)),
                 track_category=str(options.get("track_category", self.race_config.track_category)),
                 laps=int(options.get("laps", self.race_config.laps)),
                 scr_idx=self.scr_idx,
             )
-            relaunch = True
 
+        # 2. Load next racing line before touching TORCS state.
+        next_racing_line = self.racing_line
+
+        if "racing_line_csv" in options:
+            csv_path = options["racing_line_csv"]
+            next_racing_line = (
+                RacingLine.from_csv(csv_path)
+                if csv_path is not None
+                else None
+            )
+
+        # 3. Now commit Python-side state.
+        self.race_config = next_race_config
+        self.racing_line = next_racing_line
+
+        # 4. Fully close old client.
         if self.client is not None:
-            if self.reset_strategy == "meta" and not relaunch:
-                try:
-                    self.client.restart_race()
-                except Exception:
-                    relaunch = True
             self.client.close()
             self.client = None
 
-        if self.debug and self._started_once:
-            print(f"[gym_torcs] reset_strategy={self.reset_strategy} relaunch={relaunch}", flush=True)
+        # 5. Restart TORCS with the committed config.
+        if not self.auto_start_server:
+            raise RuntimeError(
+                "auto_start_server=False, but full restart reset needs auto_start_server=True."
+            )
 
-        if self.auto_start_server:
-            if relaunch or not self.server.running:
-                self.server.restart(self.race_config)
-                self._started_once = True
-        elif relaunch:
-            raise RuntimeError("Cannot relaunch TORCS when auto_start_server=False.")
+        self.server.restart(self.race_config)
+        self._started_once = True
+
+        if self.debug:
+            print(
+                f"[gym_torcs.reset] full_restart=True, "
+                f"track={self.race_config.track_category}/{self.race_config.track_name}, "
+                f"port={self.port}, scr_idx={self.scr_idx}, "
+                f"race_file={self.server.race_file}",
+                flush=True,
+            )
 
         attempts = self.client_connect_attempts
         if attempts is None:
             attempts = 600 if self.render_mode == "human" else 60
+
         self.client = TorcsClient(
             host=self.host,
             port=self.port,
             client_id=self.client_id,
             connect_attempts=attempts,
         )
+
         self.client.connect()
 
-        # After GUI autostart the SCR server can take a few seconds before
-        # the first telemetry frame is delivered. Sending a neutral keepalive
-        # action on socket timeouts prevents the server from stalling with
-        # "Timeout for client answer" while reset() waits.
         startup_wait = 60.0 if self.render_mode == "human" else 15.0
         raw = self.client.receive(max_wait=startup_wait, keepalive=True)
+
         self.time_step = 0
+        self.prev_action = np.zeros(self.action_space.shape, dtype=np.float32)
+
         return self._obs(raw), {
             "race_type": self.race_config.race_type,
             "track_name": self.race_config.track_name,
@@ -336,7 +347,9 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             "laps": self.race_config.laps,
             "port": self.port,
             "scr_idx": self.scr_idx,
+            "full_restart": True,
         }
+
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         if self.client is None:
@@ -344,19 +357,18 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
 
         action = np.asarray(action, dtype=np.float32)
         action = action.clip(-1.0, 1.0)
-
+        
         prev = dict(self.client.state.data)
         self._apply_action(action)
         self.client.send()
-        raw = self.client.receive()
-
+        raw = self.client.receive(max_wait=10.0)
         reward = self._reward(raw, prev, action)
-
         terminated = self._terminated(raw, prev)
         truncated = self._truncated(raw)
-        info = self._info(raw)
+        info = self._info(raw, prev)
 
         self.time_step += 1
+        self.prev_action = action.copy()
 
         return self._obs(raw), reward, terminated, truncated, info
 
@@ -375,21 +387,11 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         state = self.client.state.data
         cmd.steer = float(action[0])
 
-        if self.throttle is True:
-            throttle = float(action[1])
-            cmd.accel = max(throttle, 0.0)
-            cmd.brake = max(-throttle, 0.0)
+        throttle = float(action[1])
+        cmd.accel = max(throttle, 0.0)
+        cmd.brake = max(-throttle, 0.0)
         
-        else:
-            target = DEFAULT_SPEED
-            cmd.brake = 0.0
-            cmd.accel += 0.01 if state["speedX"] < target - cmd.steer * 50.0 else -0.01
-            cmd.accel = min(cmd.accel, 0.2)
-            if state["speedX"] < 10.0:
-                cmd.accel += 1.0 / (state["speedX"] + 0.1)
-
-        cmd.gear = self._automatic_gear(int(state["gear"]), float(state["rpm"]))
-        # cmd.gear = self._gear(float(state["speedX"]))
+        cmd.gear = self._gear(int(state["gear"]), float(state["rpm"]))
 
     def _obs(self, raw: dict[str, Any]) -> np.ndarray:
         speed = np.asarray([
@@ -397,16 +399,33 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             raw["speedY"] / MAX_SPEED, 
             raw["speedZ"] / MAX_SPEED
         ], dtype=np.float32)
-        
+
         rpm = np.asarray([raw["rpm"]], dtype=np.float32) / MAX_RPM
         angle = np.asarray([raw["angle"]], dtype=np.float32) / np.pi
         track_pos = np.asarray([raw["trackPos"]], dtype=np.float32)
         wheel_spin = np.asarray(raw["wheelSpinVel"], dtype=np.float32) / MAX_WHEEL_SPIN_VEL
-        
         track = np.asarray(raw["track"], dtype=np.float32) / MAX_TRACK
-        track = track + np.random.normal(0.0, 0.005, size=track.shape).astype(np.float32)
-        track = track.clip(0.0, 1.0)
 
+        if self.observation_noise:
+            track_noise = self.np_random.normal(0.0, 0.00025, size=track.shape).astype(np.float32)
+            track = (track + track_noise).clip(0.0, 1.0)
+
+            speed_noise = self.np_random.normal(0.0, 0.0025, size=speed.shape).astype(np.float32)
+            speed = (speed + speed_noise).clip(-1.0, 1.0)
+
+            track_pos_noise = self.np_random.normal(0.0, 0.00025, size=1).astype(np.float32)
+            track_pos = (track_pos + track_pos_noise).clip(-1.0, 1.0)
+            
+            angle_noise = self.np_random.normal(0.0, 0.00025, size=1).astype(np.float32)
+            angle = (angle + angle_noise).clip(-1.0, 1.0)
+            
+            rpm_noise = self.np_random.normal(0.0, 0.0025, size=1).astype(np.float32)
+            rpm = (rpm + rpm_noise).clip(0.0, 1.0)
+
+            wheel_spin_noise = self.np_random.normal(0.0, 0.0025, size=wheel_spin.shape).astype(np.float32)
+            wheel_spin = (wheel_spin + wheel_spin_noise).clip(-1.0, 1.0)
+
+        # dims = [3 + 1 + 1 + 1 + 19 + 4] = [29]
         obs = np.concatenate([speed, rpm, angle, track_pos, track, wheel_spin]).astype(np.float32)
 
         return obs
@@ -414,22 +433,56 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
     def _reward(self, obs: dict[str, Any], prev: dict[str, Any], action: np.ndarray) -> float:
         speed = float(obs["speedX"]) / MAX_SPEED
         angle = float(obs["angle"])
-        trackPos = float(obs["trackPos"])
         track = np.asarray(obs["track"], dtype=np.float32)
+        track_pos = float(obs["trackPos"])
         steering = float(action[0])
+        prev_action = self.prev_action 
+        dist_from_start = float(obs["distFromStart"]) 
 
-        # Forward progress aligned with road direction
-        reward = speed * np.cos(angle) - abs(speed * np.sin(angle)) - speed * abs(trackPos)
+        # Forward progress
+        progress = speed * np.cos(angle)
 
-        # Small steering regularization
-        reward -= 0.1 * steering**2
+        # Lateral penalty (penalizes sideway motion)
+        lateral_penalty = abs(speed * np.sin(angle))
 
+        # Encourage driving more like a race car
+        target_track_pos = 0.0
+        if self.racing_line is not None:
+            target_track_pos = -self.racing_line.get(dist_from_start)
+            # print(f"Track pos: {track_pos:.2f}\tTarget track pos: {target_track_pos:.2f}") 
+        racing_line_penalty = speed * abs(track_pos - target_track_pos)
+
+        # Steering penalty
+        steering_penalty = steering**2
+
+        # Action diff penalty (should lead to smooth actions)
+        action_diff = action - prev_action
+        action_diff_penalty = np.linalg.norm(action_diff, ord=2)
+
+        reward = (
+            progress
+            - lateral_penalty
+            - racing_line_penalty
+            - 0.1 * steering_penalty
+            - 0.1 * action_diff_penalty
+        )
+        
         # Collision
-        if float(obs["damage"]) - float(prev["damage"]) > 0.0:
+        damage_delta = float(obs["damage"]) - float(prev["damage"]) 
+        if damage_delta > 0.0:
             reward -= 1.0
 
         # Off-track
-        if track.min() < 0.0 or abs(trackPos) > 1.0:
+        if track.min() < 0.0 or abs(track_pos) > 1.0:
+            reward -= 1.0
+
+        # Moving backwards
+        if np.cos(angle) < 0.0:
+            reward -= 1.0
+        
+        # Terminal judge start
+        progress_kmh = MAX_SPEED * progress 
+        if self.time_step > TERMINAL_JUDGE_START and progress_kmh < TERMINATION_LIMIT_PROGRESS:
             reward -= 1.0
 
         return float(reward)
@@ -451,39 +504,42 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         return False
     
     def _truncated(self, obs: dict[str, Any]) -> bool:
-        # Truncate after one successful lap
         if float(obs["lastLapTime"]) > 0.0:
             return True
         if self.time_step >= self.max_episode_steps:
             return True 
         return False
 
-    def _info(self, obs: dict[str, Any]) -> dict[str, Any]:
-        info = {}
-        info["successfulLap"] = bool(float(obs["lastLapTime"]) > 0.0)
-        info["offTrack"] = bool(np.asarray(obs["track"], dtype=np.float32).min() < 0.0)
-        info["distRaced"] = obs["distRaced"]
-        info["timeAlive"] = obs["curLapTime"]
-        info["speedX"] = obs["speedX"]
-        info["speedY"] = obs["speedY"]
-        return info
+    def _done_td(self, obs: dict[str, Any], prev: dict[str, Any]) -> bool:
+        track = np.asarray(obs["track"], dtype=np.float32)
+        damage_delta = float(obs["damage"]) - float(prev["damage"])
+
+        crashed = bool(damage_delta > 0.0)
+        off_track = bool(track.min() < 0.0) or bool(abs(float(obs["trackPos"])) > 1.0)
+
+        return crashed or off_track
+
+    def _info(self, obs: dict[str, Any], prev: dict[str, Any]) -> dict[str, Any]:
+        track = np.asarray(obs["track"], dtype=np.float32)
+        damage_delta = float(obs["damage"]) - float(prev["damage"])
+
+        off_track = track.min() < 0.0 or abs(float(obs["trackPos"])) > 1.0
+        crashed = damage_delta > 0.0
+
+        return {
+            "successfulLap": bool(float(obs["lastLapTime"]) > 0.0),
+            "offTrack": off_track,
+            "crashed": crashed,
+            "damage": float(obs["damage"]),
+            "damage_delta": damage_delta,
+            "distRaced": obs["distRaced"],
+            "timeAlive": obs["curLapTime"],
+            "speedX": obs["speedX"],
+            "done_td": crashed or off_track,
+        }
 
     @staticmethod
-    def _gear(speed_x: float) -> int:
-        if speed_x > 170.0:
-            return 6
-        if speed_x > 140.0:
-            return 5
-        if speed_x > 110.0:
-            return 4
-        if speed_x > 80.0:
-            return 3
-        if speed_x > 50.0:
-            return 2
-        return 1
-
-    @staticmethod
-    def _automatic_gear(gear: int, rpm: float) -> int:
+    def _gear(gear: int, rpm: float) -> int:
         if gear < 1:
             return 1
 

@@ -1,9 +1,10 @@
 import copy
 import os
+import time
 import torch
 import torch.nn.functional as F
+import gymnasium as gym
 
-from torcsrl.config import EnvConfig
 from torcsrl.algorithms.base import OffPolicyAlgorithm
 from torcsrl.models.ac_td3 import ActorMLP, CriticMLP
 
@@ -20,18 +21,19 @@ class TD3(OffPolicyAlgorithm):
     """  
     def __init__(
         self,
-        env_cfg: EnvConfig,
+        train_env: gym.Env,
+        val_env: gym.Env,
         *,
         lr_actor: float,
         lr_critic: float,
         gamma: float = 0.99,
-        tau_polyak: float = 0.005,
-        buffer_size: int = 1_000_000,
-        buffer_start_size: int = 25_000,
-        batch_size: int = 256,
-        epsilon: float = 0.1,
-        epsilon_tgt_net: float = 0.2,
-        epsilon_clip: float = 0.5,
+        tau_polyak: float = 0.001,
+        buffer_size: int = 5_000_000,
+        buffer_start_size: int = 50_000,
+        batch_size: int = 32,
+        exploration_noise: float = 0.1,
+        noise_target_network: float = 0.2,
+        noise_target_clip: float = 0.5,
         gradient_steps: int = 1,
         policy_delay: int = 2,
         save_every: int = 5_000,
@@ -42,7 +44,8 @@ class TD3(OffPolicyAlgorithm):
         device: str = "cpu",
     ) -> None:
         super().__init__(
-            env_cfg=env_cfg,
+            train_env=train_env,
+            val_env=val_env, 
             gamma=gamma,
             tau_polyak=tau_polyak,
             buffer_size=buffer_size,
@@ -61,9 +64,9 @@ class TD3(OffPolicyAlgorithm):
         self.lr_critic = lr_critic
         self.policy_delay = policy_delay
 
-        self.epsilon = epsilon
-        self.epsilon_tgt_net = epsilon_tgt_net
-        self.epsilon_clip = epsilon_clip
+        self.exploration_noise = exploration_noise
+        self.noise_tgt_net = noise_target_network
+        self.noise_tgt_clip = noise_target_clip
 
         self.actor = ActorMLP(self.obs_dim, self.action_dim).to(self.device)
         self.actor_tgt = copy.deepcopy(self.actor)
@@ -78,8 +81,9 @@ class TD3(OffPolicyAlgorithm):
         action = self.actor.act(obs)
 
         if deterministic is False:
-            noise = self.epsilon * torch.randn_like(action) 
+            noise = self.exploration_noise * torch.randn_like(action, generator=self.torch_rng) 
             action = action + noise
+            action = action.clamp(self.action_low_torch, self.action_high_torch)
 
         return action
 
@@ -100,12 +104,13 @@ class TD3(OffPolicyAlgorithm):
             # =============== Compute targets for Q function ==================
             with torch.no_grad():
                 # Target policy smoothing
-                noise = self.epsilon_tgt_net * torch.randn_like(action) 
-                noise_tgt = noise.clip(-self.epsilon_clip, self.epsilon_clip)
-                action_pi_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt               # Target network
+                noise = self.noise_tgt_net * torch.randn_like(action, generator=self.torch_rng) 
+                noise_tgt = noise.clamp(-self.noise_tgt_clip, self.noise_tgt_clip)
+                action_tgt_next = self.actor_tgt.act(obs_next) + noise_tgt               # Target network
+                action_tgt_next = action_tgt_next.clamp(self.action_low_torch, self.action_high_torch)
 
                 # Clipped double Q-learning
-                q1_tgt_next, q2_tgt_next = self.critic_tgt(obs_next, action_pi_tgt_next)    # Target network
+                q1_tgt_next, q2_tgt_next = self.critic_tgt(obs_next, action_tgt_next)    # Target network
                 q_tgt_next = torch.min(q1_tgt_next, q2_tgt_next).view(-1)
 
                 # 1-step TD target 
@@ -130,12 +135,12 @@ class TD3(OffPolicyAlgorithm):
                 for p in self.critic.parameters():
                     p.requires_grad = False 
                 
-                action_pi = self.act(obs, deterministic=True)
-                q1 = self.critic.q1(obs, action_pi).view(-1)
-                loss_pi = torch.mean(-q1)
+                action_act = self.actor.act(obs)
+                q1 = self.critic.q1(obs, action_act).view(-1)
+                loss_actor = torch.mean(-q1)
 
                 self.optimizer_actor.zero_grad()
-                loss_pi.backward()
+                loss_actor.backward()
                 self.optimizer_actor.step()
 
                 for p in self.critic.parameters():
@@ -145,14 +150,14 @@ class TD3(OffPolicyAlgorithm):
                 self.update_target_networks()
 
     def train(self, n_timesteps: int) -> None:
-        self.collect_rollouts()
+        obs = self.collect_rollouts()
 
-        obs, _ = self.env.reset()
         episode = 0
+        start_time = time.monotonic()
 
         for step in range(1, n_timesteps + 1):
-            action = self.act_numpy(obs, deterministic=False)
-            obs_next, reward, terminated, truncated, _ = self.env.step(action)
+            action = self.act_numpy(obs, deterministic = False)
+            obs_next, reward, terminated, truncated, info = self.env.step(action)
             self.replay_buffer.push(obs, action, reward, obs_next, terminated)
             self.n_gradient_steps(step)
             obs = obs_next
@@ -163,12 +168,16 @@ class TD3(OffPolicyAlgorithm):
 
             if step % self.eval_every == 0:
                 self.evaluate(step)
+                end_time = time.monotonic() - start_time
+                start_time = time.monotonic()
+
                 if self.verbose:
-                    self.print_stats(step, episode)
+                    self.print_stats(step, episode, end_time)
 
             if step % self.save_every == 0:
                 self.save(step)
 
+        self.val_env.close()
         self.env.close()
 
     def save(self, step: int) -> None:
@@ -177,6 +186,6 @@ class TD3(OffPolicyAlgorithm):
         save_dir = os.path.join("checkpoints", algo_name, run_name)
         os.makedirs(save_dir, exist_ok=True)
 
-        torch.save(self.actor.state_dict(), os.path.join(save_dir, f"actor_{step}.pt"))
+        torch.save(self.actor.state_dict(), os.path.join(save_dir, f"actor-{step}.pt"))
         torch.save(self.critic.state_dict(), os.path.join(save_dir, "critic.pt"))
         self.eval_stats.to_csv(os.path.join(save_dir, "eval_stats.csv"))
