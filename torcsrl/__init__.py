@@ -1,1 +1,1 @@
-from torcsrl.algorithms import DDPG, TD3
+from torcsrl.algorithms import DDPG, DDPG_LAP, NSTEP_DDPG, TD3, NSTEP_TD3

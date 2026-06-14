@@ -99,9 +99,94 @@ alg.train(5_000_000)
 
 ## Install
 
-## Fedora Linux 44 Workstation
+### Ubuntu 26.04
 
-### Install TORCS 1.3.7 with the SCR server patch
+#### Install TORCS 1.3.7 with the SCR server patch
+
+1. Clone the TORCS repository:
+
+```bash
+git clone https://github.com/raphaelsenn/torcs-1.3.7
+```
+
+2. Enter the repository:
+
+```bash
+cd torcs-1.3.7
+```
+
+3. Install the required packages:
+
+```bash
+sudo apt install -y \
+    libglib2.0-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    freeglut3-dev \
+    libplib-dev \
+    libopenal-dev \
+    libalut-dev \
+    libxi-dev \
+    libxmu-dev \
+    libxrender-dev \
+    libxrandr-dev \
+    libpng-dev \
+    libvorbis-dev \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    automake \
+    autoconf \
+    libtool \
+    libxxf86vm-dev \
+    xautomation
+```
+
+4. Build and install TORCS:
+
+```bash
+make
+sudo make install
+sudo make datainstall
+```
+
+#### Install `torcsrl`
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/raphaelsenn/torcsrl
+```
+
+2. Enter the repository:
+
+```bash
+cd torcsrl
+```
+
+3. Create and activate a conda environment:
+
+```bash
+conda create -n torcsrl python=3.11 -y
+conda activate torcsrl
+```
+
+4. Install the Python requirements:
+
+```bash
+pip install -r requirements.txt
+```
+
+5. Install `torcsrl` in editable mode:
+
+```bash
+pip install -e .
+```
+
+### Fedora Linux 44 Workstation
+
+#### Install TORCS 1.3.7 with the SCR server patch
 
 1. Clone the TORCS repository:
 
@@ -157,7 +242,7 @@ You should now be able to start TORCS with:
 sudo torcs
 ```
 
-### Install `torcsrl`
+#### Install `torcsrl`
 
 1. Clone the repository:
 
@@ -177,7 +262,6 @@ cd torcsrl
 conda create -n torcsrl python=3.11 -y
 conda activate torcsrl
 ```
-
 
 4. Install the Python requirements:
 

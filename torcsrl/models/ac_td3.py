@@ -1,35 +1,41 @@
 import torch
 import torch.nn as nn
 
+from gymnasium.spaces import Box
+
 from torcsrl.models.base import Actor, Critic
 
 
 class ActorMLP(Actor):
     def __init__(
-        self, 
-        obs_dim: int, 
-        action_dim: int,
+        self,
+        obs_dim: int,
+        action_space: Box,
         h1_dim: int = 256,
         h2_dim: int = 256,
     ) -> None:
-        super().__init__(obs_dim, action_dim)
+        super().__init__(obs_dim, action_space)
 
         self.h1_dim = h1_dim
         self.h2_dim = h2_dim
-        
+
         self.mlp = nn.Sequential(
             nn.Linear(obs_dim, h1_dim),
             nn.ReLU(True),
 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-        
-            nn.Linear(h2_dim, action_dim),
+            
+            nn.Linear(h1_dim, h2_dim),
+            nn.ReLU(True),
+
+            nn.Linear(h2_dim, self.action_dim),
             nn.Tanh()
         )
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.mlp(obs)
+        return self.action_scale * self.mlp(obs) + self.action_bias
+
 
     def act(self, obs: torch.Tensor) -> torch.Tensor:
         action = self(obs)
@@ -38,8 +44,8 @@ class ActorMLP(Actor):
 
 class CriticMLP(Critic):
     def __init__(
-            self, 
-            obs_dim: int, 
+            self,
+            obs_dim: int,
             action_dim: int,
             h1_dim: int = 256,
             h2_dim: int = 256,
@@ -52,10 +58,10 @@ class CriticMLP(Critic):
         self.Q1 = nn.Sequential(
             nn.Linear(obs_dim + action_dim, h1_dim),
             nn.ReLU(True),
-        
+  
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-        
+            
             nn.Linear(h2_dim, 1)
         )
 
@@ -65,7 +71,7 @@ class CriticMLP(Critic):
         
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-        
+            
             nn.Linear(h2_dim, 1)
         )
 

@@ -10,12 +10,19 @@ from gym_torcs.constants import TRACK_SENSOR_ANGLES
 DATA_SIZE = 2**17
 
 
+def _clean_token(value: str) -> str:
+    return value.strip().strip("()").strip("\x00")
+
+
 def _parse_value(values: list[str]) -> float | list[float] | str:
+    values = [_clean_token(v) for v in values if _clean_token(v) != ""]
+
     if len(values) == 1:
         try:
             return float(values[0])
         except ValueError:
             return values[0]
+
     return [float(v) for v in values]
 
 
@@ -24,13 +31,28 @@ class ServerState:
     data: dict[str, Any] = field(default_factory=dict)
 
     def parse(self, message: str) -> dict[str, Any]:
-        body = message.strip().lstrip("(").rstrip(")")
+        body = message.strip().strip("\x00").strip()
+
+        if body.startswith("("):
+            body = body[1:]
+
+        if body.endswith(")"):
+            body = body[:-1]
+
         parsed: dict[str, Any] = {}
+
         for item in body.split(")("):
             if not item:
                 continue
+
+            item = item.strip().strip("()").strip("\x00")
             parts = item.split()
+
+            if len(parts) < 2:
+                continue
+
             parsed[parts[0]] = _parse_value(parts[1:])
+
         self.data = parsed
         return parsed
 

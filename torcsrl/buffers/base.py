@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 
 class BufferBase:
@@ -7,12 +8,20 @@ class BufferBase:
             obs_dim: int, 
             action_dim: int, 
             capacity: int,
+            batch_size: int,
+            device: str = "cpu"
     ) -> None:
         super().__init__()
         
+        assert device in {"cpu", "cuda", "mps"}, (
+            f"Invalid device, expected: `cpu`, `cuda` or `mps`, got: {device}."
+        )
+
+        self.device = torch.device(device) 
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.capacity = capacity
+        self.batch_size = batch_size
         self.position = 0
         self.size = 0
 

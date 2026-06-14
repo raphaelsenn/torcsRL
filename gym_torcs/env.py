@@ -13,11 +13,11 @@ from gym_torcs.constants import (
     MAX_TRACK,
     MAX_RPM,
     MAX_WHEEL_SPIN_VEL,
+    CURVATURE,
     TERMINAL_JUDGE_START,
     TERMINATION_LIMIT_PROGRESS,
 )
 from gym_torcs.server import RaceConfig, TorcsServer, scr_idx_from_port
-from gym_torcs.racing_line import RacingLine
 
 
 class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
@@ -37,12 +37,16 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         laps: int = 20,
         template_xml: str | None = None,
         template_practice_xml: str | None = None,  # backwards-compatible alias
-        racing_line_csv: str | None = None, 
         max_episode_steps: int = 25_000,
         reset_strategy: str = "relaunch",
-        observation_noise : bool = True, 
+        observation_noise : bool = True,
         auto_start_server: bool = True,
+        steer_min: float = -0.5,
+        steer_max: float = 0.5,
+        throttle_min: float = -0.5,
+        throttle_max: float = 1.0,
         startup_sleep: float = 1.0,
+        truncate_on_successful_lap: bool = True,
         client_connect_attempts: int | None = None,
         debug: bool = False,
         gui_auto_start: bool = True,
@@ -218,11 +222,19 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.debug = debug
         self.client_connect_attempts = client_connect_attempts
         self.time_step = 0
+        self.truncate_on_successful_lap = truncate_on_successful_lap
 
+        # NOTE: Limiting the steering angle to i.e. +\- 0.4 (corresponding to +/- 18 deg) 
+        # reflects the physically realistic Ackermann steering range.
+        # Read more here: 
+        # Deep Reinforcement Learning for Local Path Following of an Autonomous Formula SAE Vehicle, Merton et al., 2024
+        # https://arxiv.org/abs/2401.02903v1
         action_dim = 2  # [steering, throttle]
-        self.action_space = spaces.Box(-1.0, 1.0, shape=(action_dim,), dtype=np.float32)
-        
-        obs_dim = 29
+        self.act_low = np.array([steer_min, throttle_min], dtype=np.float32)
+        self.act_high = np.array([steer_max, throttle_max], dtype=np.float32)
+        self.action_space = spaces.Box(self.act_low, self.act_high, shape=(action_dim,), dtype=np.float32)
+
+        obs_dim = 33
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if template_xml is None and template_practice_xml is not None:
@@ -250,7 +262,6 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         )
         self.client: TorcsClient | None = None
         self._started_once = False
-        self.racing_line = RacingLine.from_csv(racing_line_csv) if racing_line_csv is not None else None
 
     def reset(
         self,
@@ -261,7 +272,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         super().reset(seed=seed)
         options = dict(options or {})
 
-        # 1. Build the next race config first.
+        # Build the next race config first
         next_race_config = self.race_config
 
         if "track" in options:
@@ -283,27 +294,15 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
                 scr_idx=self.scr_idx,
             )
 
-        # 2. Load next racing line before touching TORCS state.
-        next_racing_line = self.racing_line
-
-        if "racing_line_csv" in options:
-            csv_path = options["racing_line_csv"]
-            next_racing_line = (
-                RacingLine.from_csv(csv_path)
-                if csv_path is not None
-                else None
-            )
-
-        # 3. Now commit Python-side state.
+        # Now commit Python-side state
         self.race_config = next_race_config
-        self.racing_line = next_racing_line
 
-        # 4. Fully close old client.
+        # Fully close old client
         if self.client is not None:
             self.client.close()
             self.client = None
 
-        # 5. Restart TORCS with the committed config.
+        # Restart TORCS with the committed config
         if not self.auto_start_server:
             raise RuntimeError(
                 "auto_start_server=False, but full restart reset needs auto_start_server=True."
@@ -316,8 +315,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             print(
                 f"[gym_torcs.reset] full_restart=True, "
                 f"track={self.race_config.track_category}/{self.race_config.track_name}, "
-                f"port={self.port}, scr_idx={self.scr_idx}, "
-                f"race_file={self.server.race_file}",
+                f"port={self.port}, scr_idx={self.scr_idx}",
                 flush=True,
             )
 
@@ -348,6 +346,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             "port": self.port,
             "scr_idx": self.scr_idx,
             "full_restart": True,
+            "action_tita" : np.zeros(self.action_space.shape, dtype=np.float32)
         }
 
 
@@ -356,12 +355,13 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             raise RuntimeError("Call reset() before step().")
 
         action = np.asarray(action, dtype=np.float32)
-        action = action.clip(-1.0, 1.0)
-        
+        action = np.clip(action, self.act_low, self.act_high)
+        action = np.clip(action, -1.0, 1.0)
+
         prev = dict(self.client.state.data)
         self._apply_action(action)
         self.client.send()
-        raw = self.client.receive(max_wait=10.0)
+        raw = self.client.receive(max_wait=60.0)
         reward = self._reward(raw, prev, action)
         terminated = self._terminated(raw, prev)
         truncated = self._truncated(raw)
@@ -406,6 +406,13 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         wheel_spin = np.asarray(raw["wheelSpinVel"], dtype=np.float32) / MAX_WHEEL_SPIN_VEL
         track = np.asarray(raw["track"], dtype=np.float32) / MAX_TRACK
 
+        # Look ahead curvature, read more here:
+        # (1): AssettoCorsaGym, https://assetto-corsa-gym.github.io/
+        # (2): A Simulation Benchmark for Autonomous Racing with Large-Scale Human Data, https://arxiv.org/abs/2407.16680
+        # (3): Formula RL: Deep Reinforcement Learning for Autonomous Racing using Telemetry Data, https://arxiv.org/abs/2104.11106
+        lac = np.asarray([raw["curv20"], raw["curv40"], raw["curv60"], raw["curv80"]], dtype=np.float32) / CURVATURE
+        lac = np.clip(lac, -1.0, 1.0) 
+
         if self.observation_noise:
             track_noise = self.np_random.normal(0.0, 0.00025, size=track.shape).astype(np.float32)
             track = (track + track_noise).clip(0.0, 1.0)
@@ -425,9 +432,10 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             wheel_spin_noise = self.np_random.normal(0.0, 0.0025, size=wheel_spin.shape).astype(np.float32)
             wheel_spin = (wheel_spin + wheel_spin_noise).clip(-1.0, 1.0)
 
-        # dims = [3 + 1 + 1 + 1 + 19 + 4] = [29]
-        obs = np.concatenate([speed, rpm, angle, track_pos, track, wheel_spin]).astype(np.float32)
-
+        # dims = [3 + 1 + 1 + 1 + 19 + 4 + 4] = [33]
+        obs = np.concatenate([speed, rpm, angle, track_pos, track, wheel_spin, lac]).astype(np.float32)
+        # print(raw["titaLineTrackPos"], raw["titaTargetTrackPos"])
+        # print(lac)
         return obs
 
     def _reward(self, obs: dict[str, Any], prev: dict[str, Any], action: np.ndarray) -> float:
@@ -435,55 +443,34 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         angle = float(obs["angle"])
         track = np.asarray(obs["track"], dtype=np.float32)
         track_pos = float(obs["trackPos"])
-        steering = float(action[0])
-        prev_action = self.prev_action 
-        dist_from_start = float(obs["distFromStart"]) 
 
-        # Forward progress
-        progress = speed * np.cos(angle)
+        # NOTE: Target track pos from tita bot is flipped (i.e. left = -1.0 and right = 1.0),
+        # but track_pos is encoded as -1.0 = right and 1.0 = left...
+        target_track_pos = -1.0 * float(obs["titaLineTrackPos"])
+        racing_line_diff = abs(track_pos - target_track_pos)
+        # print(f"TrackPos: {track_pos:.2f}\tTargetTrackPos: {target_track_pos:.2f}")
 
-        # Lateral penalty (penalizes sideway motion)
-        lateral_penalty = abs(speed * np.sin(angle))
+        # Main reward function
+        reward = speed * (np.cos(angle) - abs(np.sin(angle)) - racing_line_diff)
+        # reward = speed * (np.cos(angle) - abs(np.sin(angle)) - racing_line_diff)
 
-        # Encourage driving more like a race car
-        target_track_pos = 0.0
-        if self.racing_line is not None:
-            target_track_pos = -self.racing_line.get(dist_from_start)
-            # print(f"Track pos: {track_pos:.2f}\tTarget track pos: {target_track_pos:.2f}") 
-        racing_line_penalty = speed * abs(track_pos - target_track_pos)
-
-        # Steering penalty
-        steering_penalty = steering**2
-
-        # Action diff penalty (should lead to smooth actions)
-        action_diff = action - prev_action
-        action_diff_penalty = np.linalg.norm(action_diff, ord=2)
-
-        reward = (
-            progress
-            - lateral_penalty
-            - racing_line_penalty
-            - 0.1 * steering_penalty
-            - 0.1 * action_diff_penalty
-        )
-        
         # Collision
         damage_delta = float(obs["damage"]) - float(prev["damage"]) 
         if damage_delta > 0.0:
-            reward -= 1.0
+            return -10.0
 
         # Off-track
         if track.min() < 0.0 or abs(track_pos) > 1.0:
-            reward -= 1.0
+            return -10.0
 
         # Moving backwards
         if np.cos(angle) < 0.0:
-            reward -= 1.0
+            return -10.0
         
         # Terminal judge start
-        progress_kmh = MAX_SPEED * progress 
+        progress_kmh = MAX_SPEED * speed
         if self.time_step > TERMINAL_JUDGE_START and progress_kmh < TERMINATION_LIMIT_PROGRESS:
-            reward -= 1.0
+            return -10.0
 
         return float(reward)
 
@@ -493,18 +480,19 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         trackPos = float(obs["trackPos"])
         track = np.asarray(obs["track"], dtype=np.float32)
         progress = speed * np.cos(angle)
+
         if track.min() < 0.0 or abs(trackPos) > 1.0:
             return True
         if self.time_step > TERMINAL_JUDGE_START and progress < TERMINATION_LIMIT_PROGRESS:
             return True
         if np.cos(float(obs["angle"])) < 0.0:
             return True
-        if float(obs["damage"]) - float(prev["damage"]) > 0.0: 
+        if float(obs["damage"]) - float(prev["damage"]) > 0.0:
             return True
         return False
     
     def _truncated(self, obs: dict[str, Any]) -> bool:
-        if float(obs["lastLapTime"]) > 0.0:
+        if float(obs["lastLapTime"]) > 0.0 and self.truncate_on_successful_lap is True:
             return True
         if self.time_step >= self.max_episode_steps:
             return True 
@@ -526,6 +514,12 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         off_track = track.min() < 0.0 or abs(float(obs["trackPos"])) > 1.0
         crashed = damage_delta > 0.0
 
+        tita_steer = float(obs["titaSteer"])
+        tita_brake = float(obs["titaBrake"])
+        tita_gas = float(obs["titaGas"])
+
+        action_tita = np.array([tita_steer, tita_gas - tita_brake], dtype=np.float32)
+
         return {
             "successfulLap": bool(float(obs["lastLapTime"]) > 0.0),
             "offTrack": off_track,
@@ -536,6 +530,8 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             "timeAlive": obs["curLapTime"],
             "speedX": obs["speedX"],
             "done_td": crashed or off_track,
+            "lastLapTime" : float(obs["lastLapTime"]),
+            "action_tita" : action_tita
         }
 
     @staticmethod

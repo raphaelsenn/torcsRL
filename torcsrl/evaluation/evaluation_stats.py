@@ -18,6 +18,8 @@ class EvluationStats:
     min_distance_: List[float] = field(default_factory=list)
     max_distance_: List[float] = field(default_factory=list)
 
+
+    lap_time_: List[float] = field(default_factory=list)
     average_time_alive_: List[float] = field(default_factory=list)
     min_time_alive_: List[float] = field(default_factory=list)
     max_time_alive_: List[float] = field(default_factory=list)
@@ -32,7 +34,8 @@ class EvluationStats:
             time_alive: np.ndarray, 
             mean_speed: np.ndarray,
             successful: np.ndarray,
-            damage: np.ndarray
+            damage: np.ndarray,
+            lap_time: np.ndarray
     ) -> None:
         average_return = float(np.mean(rewards).item())
         std_return = float(np.std(rewards).item())
@@ -57,6 +60,7 @@ class EvluationStats:
         self.min_distance_.append(min_distance)
         self.max_distance_.append(max_distance)
 
+        self.lap_time_.append(lap_time) 
         self.average_time_alive_.append(average_time_alive)
         self.min_time_alive_.append(min_time_alive)
         self.max_time_alive_.append(max_time_alive)
@@ -77,12 +81,14 @@ class EvluationStats:
             "average_distance": self.average_distance_,
             "min_distance": self.min_distance_,
             "max_distance": self.max_distance_,
-            
+
+            "lap_time"  : self.lap_time_, 
             "average_time_alive": self.average_time_alive_,
             "min_time_alive": self.min_time_alive_,
             "max_time_alive": self.max_time_alive_,
             
             "successful_laps": self.succesfull_laps_,
+            "average_damage": self.average_damage_,
         }
         pd.DataFrame.from_dict(data).to_csv(path, index=False)
 
@@ -109,6 +115,10 @@ class EvluationStats:
     @property
     def last_max_distance(self) -> float:
         return self.max_distance_[-1]
+    
+    @property
+    def last_lap_time(self) -> float:
+        return self.lap_time_[-1]
     
     @property
     def last_average_time_alive(self) -> float:

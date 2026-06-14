@@ -1,16 +1,18 @@
 from typing import Dict, Any
+from collections import deque
 
 import copy
 import time
 import torch
 import torch.nn.functional as F
 import gymnasium as gym
+import numpy as np
 
 from torcsrl.algorithms.base import OffPolicyAlgorithm
 from torcsrl.models.ac_td3 import ActorMLP, CriticMLP
 
 
-class TD3(OffPolicyAlgorithm):
+class NSTEP_TD3(OffPolicyAlgorithm):
     """
     Twin Delayed Deep Deterministic Policy Gradient Algorithm (TD3).
 
@@ -28,6 +30,7 @@ class TD3(OffPolicyAlgorithm):
         ac_kwargs: Dict[str, Any],
         lr_actor: float = 0.0003,
         lr_critic: float = 0.0003,
+        n_steps: int = 1,
         gamma: float = 0.995,
         tau_polyak: float = 0.005,
         buffer_size: int = 3_000_000,
@@ -47,7 +50,7 @@ class TD3(OffPolicyAlgorithm):
         super().__init__(
             train_env=train_env,
             val_env=val_env,
-            ac_kwargs=ac_kwargs, 
+            ac_kwargs=ac_kwargs,
             gamma=gamma,
             tau_polyak=tau_polyak,
             buffer_size=buffer_size,
@@ -64,7 +67,8 @@ class TD3(OffPolicyAlgorithm):
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
         self.policy_delay = policy_delay
-        
+        self.n_steps = n_steps
+
         self.exploration_noise = exploration_noise * self.action_scale_torch
         self.noise_tgt_net = noise_target_network * self.action_scale_torch
         self.noise_tgt_clip = noise_target_clip * self.action_scale_torch
@@ -152,7 +156,7 @@ class TD3(OffPolicyAlgorithm):
             self.grad_step_counter += 1         # NOTE: INCREASE GRADIENT STEP COUNTER
 
     def train(self, n_timesteps: int) -> None:
-        obs, info = self.collect_rollouts()
+        obs, info, (s_queue, a_queue, r_queue) = self.collect_n_step_rollouts()
 
         self.episode_counter = 1
         self.grad_step_counter = 1
@@ -165,8 +169,19 @@ class TD3(OffPolicyAlgorithm):
         for _ in range(1, n_timesteps + 1):
             action = self.act_numpy(obs, deterministic = False)
             obs_next, reward, terminated, truncated, info = self.env.step(action)
-            
-            self.replay_buffer.push(obs, action, reward, obs_next, terminated)
+
+            # Update queues
+            s_queue.append(obs_next)
+            a_queue.append(action)
+            r_queue.append(reward)
+
+            if len(s_queue) == self.n_steps + 1:
+                self.push_n_step_transition(s_queue, a_queue, r_queue, terminated)
+
+            if terminated or truncated:
+                while len(a_queue) > 0:
+                    self.push_n_step_transition(s_queue, a_queue, r_queue, terminated)
+
             self.n_gradient_steps()
             obs = obs_next
             
@@ -181,7 +196,59 @@ class TD3(OffPolicyAlgorithm):
                 self.episode_counter += 1       # NOTE: INCREASE EPISODE STEP COUNTER
                 obs, info = self.env.reset()
 
+                # Clear queue. 
+                s_queue.clear(); a_queue.clear(); r_queue.clear()
+                s_queue.append(obs)
+
             self.global_step_counter += 1       # NOTE: INCREASE GLOBAL STEP COUNTER
 
         self.val_env.close()
         self.env.close()
+
+    def push_n_step_transition(self, s_queue, a_queue, r_queue, terminated: bool):
+        s = s_queue.popleft()
+        a = a_queue.popleft()
+
+        ret = sum(float(r) * (self.gamma ** i) for i, r in enumerate(r_queue))
+        s_next = s_queue[-1]
+
+        self.replay_buffer.push(s, a, ret, s_next, float(terminated))
+
+        r_queue.popleft()
+
+    def collect_n_step_rollouts(self) -> tuple[np.ndarray, Dict[str, Any]]:
+        env = self.env  # NOTE: Training environment
+        env.action_space.seed(self.seed)
+        obs, info = env.reset(seed=self.seed)
+
+        s_queue = deque([obs], maxlen=self.n_steps + 1)
+        a_queue = deque([], maxlen=self.n_steps)
+        r_queue = deque([], maxlen=self.n_steps)
+
+        for _ in range(self.buffer_start_size):
+            # Sample random action and step environment.
+            action = env.action_space.sample()
+            # action = info["action_tita"]
+            obs_next, reward, terminated, truncated, info = env.step(action)
+
+            # Update queues
+            s_queue.append(obs_next)
+            a_queue.append(action)
+            r_queue.append(reward)
+
+            # Push on replay buffer
+            if len(s_queue) == self.n_steps + 1:
+                self.push_n_step_transition(s_queue, a_queue, r_queue, terminated)
+
+            if terminated or truncated:
+                while len(a_queue) > 0:
+                    self.push_n_step_transition(s_queue, a_queue, r_queue, terminated)       
+
+            obs = obs_next  # NOTE: Set obs to next observation!!!
+
+            if terminated or truncated:
+                obs, info = env.reset()
+                s_queue.clear(); a_queue.clear(); r_queue.clear()
+                s_queue.append(obs)
+
+        return obs, info, (s_queue, a_queue, r_queue)

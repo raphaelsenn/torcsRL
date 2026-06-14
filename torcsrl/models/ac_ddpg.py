@@ -1,18 +1,25 @@
 import torch
 import torch.nn as nn
+from gymnasium.spaces import Box
 
 from torcsrl.models.base import Actor, Critic
+
+
+DEFAULT_AC_KWARGS = {
+    "h1_dim" : 256,
+    "h2_dim" : 256
+}
 
 
 class ActorMLP(Actor):
     def __init__(
         self, 
         obs_dim: int, 
-        action_dim: int,
-        h1_dim: int = 512,
-        h2_dim: int = 512,
+        action_space: Box,
+        h1_dim: int = 256,
+        h2_dim: int = 256,
     ) -> None:
-        super().__init__(obs_dim, action_dim)
+        super().__init__(obs_dim, action_space)
 
         self.h1_dim = h1_dim
         self.h2_dim = h2_dim
@@ -24,7 +31,7 @@ class ActorMLP(Actor):
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
             
-            nn.Linear(h2_dim, action_dim),
+            nn.Linear(h2_dim, self.action_dim),
             nn.Tanh()
         )
 
@@ -40,8 +47,8 @@ class CriticMLP(Critic):
         self, 
         obs_dim: int, 
         action_dim: int,
-        h1_dim: int = 512,
-        h2_dim: int = 512,
+        h1_dim: int = 256,
+        h2_dim: int = 256,
     ) -> None:
         super().__init__(obs_dim, action_dim)
 
@@ -54,7 +61,7 @@ class CriticMLP(Critic):
 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-            
+
             nn.Linear(h2_dim, 1),
         )
 

@@ -226,3 +226,8 @@ checkpoints
 test.py
 plots_test.ipynb
 test2.py
+td3.ipynb
+ddpg.ipynb
+hpo.py
+plot.ipynb
+test.py
