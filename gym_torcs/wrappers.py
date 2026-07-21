@@ -29,7 +29,6 @@ class TimedTrackSelectionWrapper(gym.Wrapper):
     If a TrackSpec contains `racing_line_csv`, the matching racing line is loaded
     on reset together with the selected track.
     """
-
     def __init__(
         self,
         env: gym.Env,
@@ -196,39 +195,3 @@ class HistoryWrapper(gym.Wrapper[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
         self.action_history = np.roll(self.action_history, shift=-action.shape[-1], axis=-1)
         self.action_history[..., -action.shape[-1] :] = action
         return self._create_obs_from_history(), reward, terminated, truncated, info
-
-
-class ActionSmoothingWrapper(gym.Wrapper):
-    """
-    NOTE: This wrapper was taken from: 
-    https://rl-baselines3-zoo.readthedocs.io/en/master/_modules/rl_zoo3/wrappers.html#HistoryWrapper 
-     
-    Smooth the action using exponential moving average.
-
-    :param env:
-    :param smoothing_coef: Smoothing coefficient (0 no smoothing, 1 very smooth)
-    """
-
-    def __init__(self, env: gym.Env, smoothing_coef: float = 0.0):
-        super().__init__(env)
-        self.smoothing_coef = smoothing_coef
-        self.smoothed_action = None
-        # from https://github.com/rail-berkeley/softlearning/issues/3
-        # for smoothing latent space
-        # self.alpha = self.smoothing_coef
-        # self.beta = np.sqrt(1 - self.alpha ** 2) / (1 - self.alpha)
-
-
-    
-    def reset(self, seed: int | None = None, options: dict | None = None):
-            self.smoothed_action = None
-            # assert options is None, "Options not supported for now"
-            return self.env.reset(seed=seed, options=options)
-
-
-    def step(self, action):
-            if self.smoothed_action is None:
-                self.smoothed_action = np.zeros_like(action)
-            assert self.smoothed_action is not None
-            self.smoothed_action = self.smoothing_coef * self.smoothed_action + (1 - self.smoothing_coef) * action
-            return self.env.step(self.smoothed_action)

@@ -7,6 +7,13 @@ from typing import Any
 
 from gym_torcs.constants import TRACK_SENSOR_ANGLES
 
+"""
+NOTE: This code is mostly taken from: 
+https://github.com/ugo-nama-kun/gym_torcs
+https://github.com/giuse/vtorcs
+https://github.com/dosssman/GymTorcs
+"""
+
 DATA_SIZE = 2**17
 
 

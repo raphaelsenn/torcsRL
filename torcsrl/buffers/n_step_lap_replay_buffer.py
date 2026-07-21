@@ -5,7 +5,7 @@ import torch
 from torcsrl.buffers.base import BufferBase
 
 
-class LapReplayBuffer(BufferBase):
+class NStepLapReplayBuffer(BufferBase):
     """
     Loss-Adjusted Prioritized Experience Replay.
     
@@ -20,6 +20,7 @@ class LapReplayBuffer(BufferBase):
             device: str = "cpu"
     ) -> None:
         super().__init__(obs_dim, action_dim, capacity, batch_size, device)
+        self.steps = np.empty_like(self.dones)   # Only relevant if t + n > T
         self.priorities = np.zeros_like(self.rewards)
         self.max_priority = 1.0
 
@@ -30,6 +31,7 @@ class LapReplayBuffer(BufferBase):
             reward: float, 
             obs_next: np.ndarray, 
             dones: bool,
+            steps: int,
     ) -> None:
         pos = self.position
 
@@ -38,6 +40,7 @@ class LapReplayBuffer(BufferBase):
         self.rewards[pos] = float(reward)
         self.obs_next[pos] = obs_next.astype(np.float32)
         self.dones[pos] = float(dones)
+        self.steps[pos] = float(steps)
         self.priorities[pos] = self.max_priority
 
         self.position = (pos + 1) % self.capacity 
@@ -59,8 +62,9 @@ class LapReplayBuffer(BufferBase):
         rewards_bt = torch.as_tensor(self.rewards[self.indices], dtype=torch.float32, device=self.device)
         obs_next_bt = torch.as_tensor(self.obs_next[self.indices], dtype=torch.float32, device=self.device)
         dones_bt = torch.as_tensor(self.dones[self.indices], dtype=torch.float32, device=self.device)
+        steps_bt = torch.as_tensor(self.steps[self.indices], dtype=torch.float32, device=self.device)
 
-        return obs_bt, actions_bt, rewards_bt, obs_next_bt, dones_bt
+        return obs_bt, actions_bt, rewards_bt, obs_next_bt, dones_bt, steps_bt
     
     def update_priorities(self, priorities: torch.Tensor | np.ndarray) -> None:
         if isinstance(priorities, torch.Tensor):

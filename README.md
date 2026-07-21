@@ -1,32 +1,43 @@
 # torcsRL
 
-There are several open-source TORCS reinforcement learning projects, many of them are based on older codebases, use Keras or TensorFlow 1-style implementations, and mainly focus on DDPG with classical Ornstein-Uhlenbeck exploration noise.
+There are several TORCS reinforcement learning projects, many of them are based on older codebases and use old versions of Keras or TensorFlow.
 
-This repo provides a modern PyTorch-based implementation for training RL agents in TORCS. It uses a Gymnasium environment interface, supports configurable training and evaluation tracks, and includes modern actor-critic algorithms such as TD3, PPO, and SAC.
+This repo provides a modern PyTorch implementation/interface for training RL agents in TORCS. It uses a Gymnasium environment interface and provides configurable training and evaluation tracks.
 
-## Training and Evaluation
+## Implemented Algoritms
 
-### Alpine-2 Challange
+* DDPG (N-Step)
+* TD3 (N-Step)
+* SAC (N-Step; Not evaluated yet - due to limited compute)
+* TD7 (Not evaluated yet - due to limited compute )
 
-| Split | Track | Preview |
-| --- | ---: | --- |
-| Training | `Alpine-1`, `Aalborg`, `Street-1`, `Forza`, `E-Track-2`, `G-Track-1`, `Brondehach`  | <img src="./assets/train_tracks.png" width="280"> |
-| Evaluation | `Alpine-2` | <img src="./assets/alpine-2.jpg" width="280"> |
+## Experiment
+
+Note that due to my limited compute resources, I evaluated only two algorithms: DDPG and TD3. Each algorithm was trained on the six training tracks and evaluated on the three validation tracks every 10,000 timesteps. Each algorithm was trained for 5 million timesteps and evaluated across three different seeds.
+
+#### Training and Validation Tracks
 
 <p align="center">
-  <img src="./assets/alpine_learning_curve.png">
+  <img src="./assets/train_val_tracks.png">
 </p>
 
+<p align="center"> <em>Figure 1: Training and validation tracks. Alpine-1, Aalborg, Street-1, Forza, Wheel-1, and Wheel-2 are used for training, while G-Track-2, Brondehach, and Alpine-2 are used for validation.</em> </p>
+
 <p align="center">
-  <em>Average return on the evaluation track <code>alpine-2</code>, evaluated every 5,000 training steps (averaged over 3 seeds).</em>
+  <img src="./assets/learning_curves.png">
 </p>
+
+<p align="center"> <em>Figure 2: Learning curves of DDPG and TD3 on training and validation tracks. </em> </p>
+
+#### Results
 
 #### Hyperparameters
 
 | Algorithm | Timesteps | Actor LR | Critic LR | Batch size | Buffer size | Start steps | Discount | Polyak τ | Policy delay | Exploration |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| DDPG | 5,000,000 | 1e-4 | 1e-3 | 32 | 5,000,000 | 50,000 | 0.99 | 0.001 | 2 | Gaussian, σ = 0.1 |
-| TD3 | 5,000,000 | 1e-4 | 1e-3 | 32 | 5,000,000 | 50,000 | 0.99 | 0.005 | 2 | Gaussian, σ = 0.1 |
+| DDPG | 5,000,000 | 3e-4 | 3e-4 | 256 | 1,000,000 | 10,000 | 0.992 | 0.005 | 2 | Gaussian, σ = 0.1 |
+| TD3 | 5,000,000 | 3e-4 | 3e-4 | 256 | 1,000,000 | 10,000 | 0.992 | 0.005 | 2 | Gaussian, σ = 0.1 |
+
 
 ## Usage
 
@@ -34,22 +45,40 @@ This repo provides a modern PyTorch-based implementation for training RL agents 
 import gymnasium as gym
 import gym_torcs
 
-from torcsrl import TD3
-from torcsrl.wrappers import TimedTrackSelectionWrapper, TrackSpec
+from torcsrl import NStepTD3
+from torcsrl.wrappers import TimedTrackSelectionWrapper, TrackSpec, HistoryWrapper
 
 
 train_tracks = [
     TrackSpec("alpine-1", "road", "alpine_1_tita_expert.csv"),
-    TrackSpec("g-track-1", "road", "g_track_1_tita_expert.csv"),
-    TrackSpec("street-1", "road", "street_1_tita_expert.csv"),
-    TrackSpec("brondehach", "road", "brondehach_tita_expert.csv"),
     TrackSpec("aalborg", "road", "aalborg_tita_expert.csv"),
-    TrackSpec("e-track-2", "road", "e_track_2_tita_expert.csv"),
+    TrackSpec("street-1", "road", "street_1_tita_expert.csv"),
     TrackSpec("forza", "road", "forza_tita_expert.csv"),
+    TrackSpec("wheel-1", "road", "wheel_1_tita_expert.csv"),
+    TrackSpec("wheel-2", "road", "wheel_2_tita_expert.csv"),
+]
+
+val_tracks = [
+    # Training tracks
+    TrackSpec("alpine-1", "road"),
+    TrackSpec("aalborg", "road"),
+    TrackSpec("street-1", "road"),
+    TrackSpec("forza", "road"),
+    TrackSpec("wheel-1", "road", "wheel_1_tita_expert.csv"),
+    TrackSpec("wheel-2", "road", "wheel_2_tita_expert.csv"),
+
+    # Validation tracks
+    TrackSpec("g-track-1", "road"),
+    TrackSpec("g-track-2", "road"),
+    TrackSpec("brondehach", "road"),
+    TrackSpec("alpine-2", "road"),
 ]
 
 
-seed = 0
+SEED = 0
+HORIZON_OBS = 3
+HORIZON_ACT = 3
+SWITCH_TRACK_EVERY = 50_000
 
 train_env = gym.make(
     "TorcsSCR-v0",
@@ -61,12 +90,11 @@ train_env = gym.make(
     reset_strategy="relaunch",
     racing_line_csv="alpine_1_tita_expert.csv",
 )
-
 train_env = TimedTrackSelectionWrapper(
-    train_env,
-    tracks=train_tracks,
-    switch_every_steps=50_000,
+    train_env, tracks=train_tracks, switch_every_steps=SWITCH_TRACK_EVERY,
 )
+train_env = HistoryWrapper(train_env, HORIZON_OBS, HORIZON_ACT)
+
 
 val_env = gym.make(
     "TorcsSCR-v0",
@@ -78,18 +106,23 @@ val_env = gym.make(
     reset_strategy="relaunch",
     racing_line_csv="alpine_2_tita_expert.csv",
 )
+val_env = HistoryWrapper(val_env, HORIZON_OBS, HORIZON_ACT)
+val_env = TimedTrackSelectionWrapper(
+    val_env, val_tracks, switch_every_steps=1
+)
 
-alg = TD3(
+alg = NStepTD3(
     train_env,
     val_env,
-    lr_actor=1e-4,
-    lr_critic=1e-3,
-    buffer_size=5_000_000,
-    buffer_start_size=50_000,
+    n_steps=3,
+    lr_actor=3e-4,
+    lr_critic=3e-4,
+    buffer_size=3_000_000,
+    buffer_start_size=25_000,
     batch_size=256,
     tau_polyak=0.005,
-    save_every=5_000,
-    eval_every=5_000,
+    save_every=10_000,
+    eval_every=10_000,
     device="cuda",
     seed=seed,
 )

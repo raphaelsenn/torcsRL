@@ -12,6 +12,13 @@ from pathlib import Path
 
 from gym_torcs.constants import DEFAULT_TORCS_EXECUTABLE, SCR_MAX_PORT, SCR_MIN_PORT
 
+"""
+NOTE: This code is mostly taken from: 
+https://github.com/ugo-nama-kun/gym_torcs
+https://github.com/giuse/vtorcs
+https://github.com/dosssman/GymTorcs
+"""
+
 
 def scr_idx_from_port(port: int) -> int:
     """Map SCR UDP ports to scr_server driver indices.

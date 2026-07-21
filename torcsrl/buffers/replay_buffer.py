@@ -30,9 +30,3 @@ class ReplayBuffer(BufferBase):
         dones_bt = torch.as_tensor(self.dones[indices], dtype=torch.float32, device=self.device)
 
         return obs_bt, actions_bt, rewards_bt, obs_next_bt, dones_bt
-    
-    def save(self):
-        ...
-    
-    def load(self):
-        ...

@@ -7,7 +7,7 @@ from torcsrl.models.base import Actor, Critic
 
 DEFAULT_AC_KWARGS = {
     "h1_dim" : 256,
-    "h2_dim" : 256
+    "h2_dim" : 256,
 }
 
 
@@ -30,7 +30,7 @@ class ActorMLP(Actor):
 
             nn.Linear(h1_dim, h2_dim),
             nn.ReLU(True),
-            
+
             nn.Linear(h2_dim, self.action_dim),
             nn.Tanh()
         )

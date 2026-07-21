@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 from typing import Any
+import os
 
 import gymnasium as gym
 import numpy as np
@@ -10,14 +10,24 @@ from gym_torcs.client import TorcsClient
 from gym_torcs.constants import (
     DEFAULT_TORCS_EXECUTABLE,
     MAX_SPEED,
+    MAX_ACCEL,
     MAX_TRACK,
     MAX_RPM,
     MAX_WHEEL_SPIN_VEL,
     CURVATURE,
     TERMINAL_JUDGE_START,
     TERMINATION_LIMIT_PROGRESS,
+    RACING_LINES
 )
 from gym_torcs.server import RaceConfig, TorcsServer, scr_idx_from_port
+from gym_torcs.curvature import RacingLineCurvatureMap
+
+"""
+NOTE: This code is mostly taken from: 
+https://github.com/ugo-nama-kun/gym_torcs
+https://github.com/giuse/vtorcs
+https://github.com/dosssman/GymTorcs
+"""
 
 
 class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
@@ -37,14 +47,10 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         laps: int = 20,
         template_xml: str | None = None,
         template_practice_xml: str | None = None,  # backwards-compatible alias
-        max_episode_steps: int = 25_000,
+        torcs_max_episode_steps: int = 25_000,
         reset_strategy: str = "relaunch",
         observation_noise : bool = True,
         auto_start_server: bool = True,
-        steer_min: float = -0.5,
-        steer_max: float = 0.5,
-        throttle_min: float = -0.5,
-        throttle_max: float = 1.0,
         startup_sleep: float = 1.0,
         truncate_on_successful_lap: bool = True,
         client_connect_attempts: int | None = None,
@@ -213,7 +219,7 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.scr_idx = scr_idx_from_port(self.port)
         self.host = host
         self.client_id = client_id
-        self.max_episode_steps = max_episode_steps
+        self.torcs_max_episode_steps = torcs_max_episode_steps
         self.observation_noise = observation_noise 
         if reset_strategy not in {"relaunch", "meta"}:
             raise ValueError("reset_strategy must be 'relaunch' or 'meta'.")
@@ -229,12 +235,17 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         # Read more here: 
         # Deep Reinforcement Learning for Local Path Following of an Autonomous Formula SAE Vehicle, Merton et al., 2024
         # https://arxiv.org/abs/2401.02903v1
+        # action_dim = 2  # [steering, throttle]
+        #self.act_low = np.array([steer_min, throttle_min], dtype=np.float32)
+        #self.act_high = np.array([steer_max, throttle_max], dtype=np.float32)
+
         action_dim = 2  # [steering, throttle]
-        self.act_low = np.array([steer_min, throttle_min], dtype=np.float32)
-        self.act_high = np.array([steer_max, throttle_max], dtype=np.float32)
+        self.act_low = np.array([-1.0, -1.0], dtype=np.float32)
+        self.act_high = np.array([1.0, 1.0], dtype=np.float32)
         self.action_space = spaces.Box(self.act_low, self.act_high, shape=(action_dim,), dtype=np.float32)
 
-        obs_dim = 33
+        # Old TORCS features 29 features, this version adds 16 new features (12 LAC values, racing line diff, accel xyz)
+        obs_dim = 29 + 16
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if template_xml is None and template_practice_xml is not None:
@@ -263,16 +274,19 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.client: TorcsClient | None = None
         self._started_once = False
 
-    def reset(
-        self,
-        *,
-        seed: int | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> tuple[np.ndarray, dict[str, Any]]:
+        self.racing_line_curvature = None
+        self.racing_line_track_name = None
+        self.racing_line_path = None
+        self._racing_line_cache: dict[str, RacingLineCurvatureMap] = {}
+
+        # Assetto-Corsa-Gym-style 12 values over 300 m:
+        # 0, 25, 50, ..., 275
+        self.lac_distances = np.arange(0, 300, 25.0, dtype=np.float32)
+
+    def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         options = dict(options or {})
 
-        # Build the next race config first
         next_race_config = self.race_config
 
         if "track" in options:
@@ -294,15 +308,25 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
                 scr_idx=self.scr_idx,
             )
 
-        # Now commit Python-side state
         self.race_config = next_race_config
+        self.racing_line_curvature = None
+        self.racing_line_track_name = None
+        self.racing_line_path = None
+        track_length = None
 
-        # Fully close old client
+        curv_map, racing_line_path, track_length = self._get_racing_line(
+            self.race_config.track_name
+        )
+
+        if curv_map is not None:
+            self.racing_line_curvature = curv_map
+            self.racing_line_track_name = self.race_config.track_name
+            self.racing_line_path = racing_line_path
+
         if self.client is not None:
             self.client.close()
             self.client = None
 
-        # Restart TORCS with the committed config
         if not self.auto_start_server:
             raise RuntimeError(
                 "auto_start_server=False, but full restart reset needs auto_start_server=True."
@@ -310,14 +334,6 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
 
         self.server.restart(self.race_config)
         self._started_once = True
-
-        if self.debug:
-            print(
-                f"[gym_torcs.reset] full_restart=True, "
-                f"track={self.race_config.track_category}/{self.race_config.track_name}, "
-                f"port={self.port}, scr_idx={self.scr_idx}",
-                flush=True,
-            )
 
         attempts = self.client_connect_attempts
         if attempts is None:
@@ -338,30 +354,81 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         self.time_step = 0
         self.prev_action = np.zeros(self.action_space.shape, dtype=np.float32)
 
+        tita_steer = float(raw["titaSteer"])
+        tita_gas = float(raw["titaGas"])
+        tita_brake = float(raw["titaBrake"])
+        tita_throttle = tita_gas - tita_brake
+        action_tita = np.array([tita_steer, tita_throttle], dtype=np.float32)
+
         return self._obs(raw), {
             "race_type": self.race_config.race_type,
             "track_name": self.race_config.track_name,
             "track_category": self.race_config.track_category,
+            "track_length": track_length,
+            "racing_line_track_name": self.racing_line_track_name,
             "laps": self.race_config.laps,
             "port": self.port,
             "scr_idx": self.scr_idx,
             "full_restart": True,
-            "action_tita" : np.zeros(self.action_space.shape, dtype=np.float32)
+            "action_tita": action_tita,
+            "distFromStart": raw.get("distFromStart", 0.0),
         }
-
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         if self.client is None:
             raise RuntimeError("Call reset() before step().")
 
         action = np.asarray(action, dtype=np.float32)
-        action = np.clip(action, self.act_low, self.act_high)
+        # action = np.clip(action, self.act_low, self.act_high)
         action = np.clip(action, -1.0, 1.0)
 
         prev = dict(self.client.state.data)
         self._apply_action(action)
         self.client.send()
-        raw = self.client.receive(max_wait=60.0)
+        # raw = self.client.receive(max_wait=10.0)
+        try:
+            raw = self.client.receive(max_wait=10.0)
+        except TimeoutError as e:
+            print(
+                "[TORCS TIMEOUT] no telemetry received. "
+                f"track={self.race_config.track_category}/{self.race_config.track_name}, "
+                f"port={self.port}, "
+                f"step={self.time_step}"
+            )
+
+            if self.client is not None:
+                self.client.close()
+                self.client = None
+
+            obs = getattr(
+                self,
+                "_last_obs",
+                np.zeros(self.observation_space.shape, dtype=np.float32),
+            )
+
+            info = {
+                "torcs_timeout": True,
+                "track_name": self.race_config.track_name,
+                "track_category": self.race_config.track_category,
+                "port": self.port,
+                "scr_idx": self.scr_idx,
+                "done_td": True,
+                "offTrack": False,
+                "crashed": True,
+                "damage": np.nan,
+                "damage_delta": np.nan,
+                "distRaced": np.nan,
+                "timeAlive": np.nan,
+                "speedX": np.nan,
+                "lastLapTime": 0.0,
+                "action_tita": np.zeros(3, dtype=np.float32),
+                "globalX": np.nan,
+                "globalY": np.nan,
+                "distFromStart": np.nan,
+            }
+
+            return obs, 0.0, False, True, info
+
         reward = self._reward(raw, prev, action)
         terminated = self._terminated(raw, prev)
         truncated = self._truncated(raw)
@@ -383,63 +450,84 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
 
     def _apply_action(self, action: np.ndarray) -> None:
         assert self.client is not None
+
         cmd = self.client.action
         state = self.client.state.data
-        cmd.steer = float(action[0])
 
+        steer = float(action[0])
         throttle = float(action[1])
+
+        cmd.steer = steer
         cmd.accel = max(throttle, 0.0)
         cmd.brake = max(-throttle, 0.0)
-        
         cmd.gear = self._gear(int(state["gear"]), float(state["rpm"]))
 
     def _obs(self, raw: dict[str, Any]) -> np.ndarray:
         speed = np.asarray([
-            raw["speedX"] / MAX_SPEED, 
-            raw["speedY"] / MAX_SPEED, 
+            raw["speedX"] / MAX_SPEED,
+            raw["speedY"] / MAX_SPEED,
             raw["speedZ"] / MAX_SPEED
-        ], dtype=np.float32)
+        ], dtype=np.float32)                                                                            # [-1, 1]
 
-        rpm = np.asarray([raw["rpm"]], dtype=np.float32) / MAX_RPM
-        angle = np.asarray([raw["angle"]], dtype=np.float32) / np.pi
-        track_pos = np.asarray([raw["trackPos"]], dtype=np.float32)
-        wheel_spin = np.asarray(raw["wheelSpinVel"], dtype=np.float32) / MAX_WHEEL_SPIN_VEL
-        track = np.asarray(raw["track"], dtype=np.float32) / MAX_TRACK
+        accel = np.asarray([
+            raw["accelX"] / MAX_ACCEL,
+            raw["accelY"] / MAX_ACCEL,
+            raw["accelZ"] / MAX_ACCEL
+        ], dtype=np.float32)                                                                            # [-1, 1]
+
+        rpm = (np.asarray([raw["rpm"]], dtype=np.float32) / MAX_RPM) * 2 - 1                            # [-1, 1]
+        angle = np.asarray([raw["angle"]], dtype=np.float32) / np.pi                                    # [-1, 1]
+        track_pos = np.asarray([raw["trackPos"]], dtype=np.float32)                                     # [-1, 1]
+        wheel_spin = (np.asarray(raw["wheelSpinVel"], dtype=np.float32) / MAX_WHEEL_SPIN_VEL) * 2 - 1   # [-1, 1]
+        track = (np.asarray(raw["track"], dtype=np.float32) / MAX_TRACK) * 2 - 1                        # [-1, 1]
+
+        target_track_pos = -1.0 * float(raw["titaLineTrackPos"])
+        racing_line_diff = np.asarray([(float(raw["trackPos"]) - target_track_pos) / 2], dtype=np.float32)
+        racing_line_diff = np.clip(racing_line_diff, -1.0, 1.0)                                         # [-1, 1]
 
         # Look ahead curvature, read more here:
         # (1): AssettoCorsaGym, https://assetto-corsa-gym.github.io/
         # (2): A Simulation Benchmark for Autonomous Racing with Large-Scale Human Data, https://arxiv.org/abs/2407.16680
         # (3): Formula RL: Deep Reinforcement Learning for Autonomous Racing using Telemetry Data, https://arxiv.org/abs/2104.11106
-        lac = np.asarray([raw["curv20"], raw["curv40"], raw["curv60"], raw["curv80"]], dtype=np.float32) / CURVATURE
-        lac = np.clip(lac, -1.0, 1.0) 
+        if self.racing_line_curvature is not None and "distFromStart" in raw: 
+            lac = self.racing_line_curvature.lookahead(
+                dist_from_start=float(raw["distFromStart"]),
+                distances=self.lac_distances,
+            )
+            lac = lac / CURVATURE
+            # lac = np.clip(lac, -1.0, 1.0)
 
-        if self.observation_noise:
-            track_noise = self.np_random.normal(0.0, 0.00025, size=track.shape).astype(np.float32)
-            track = (track + track_noise).clip(0.0, 1.0)
+        else: 
+            print("Wrong LAC...")
+            lac = np.asarray([
+                raw["curv0"],
+                raw["curv25"],
+                raw["curv50"],
+                raw["curv75"],
+                raw["curv100"],
+                raw["curv125"],
+                raw["curv150"],
+                raw["curv175"],
+                raw["curv200"],
+                raw["curv225"],
+                raw["curv250"],
+                raw["curv275"],
+            ], dtype=np.float32) / CURVATURE
+            # lac = np.clip(lac, -1.0, 1.0)
 
-            speed_noise = self.np_random.normal(0.0, 0.0025, size=speed.shape).astype(np.float32)
-            speed = (speed + speed_noise).clip(-1.0, 1.0)
-
-            track_pos_noise = self.np_random.normal(0.0, 0.00025, size=1).astype(np.float32)
-            track_pos = (track_pos + track_pos_noise).clip(-1.0, 1.0)
-            
-            angle_noise = self.np_random.normal(0.0, 0.00025, size=1).astype(np.float32)
-            angle = (angle + angle_noise).clip(-1.0, 1.0)
-            
-            rpm_noise = self.np_random.normal(0.0, 0.0025, size=1).astype(np.float32)
-            rpm = (rpm + rpm_noise).clip(0.0, 1.0)
-
-            wheel_spin_noise = self.np_random.normal(0.0, 0.0025, size=wheel_spin.shape).astype(np.float32)
-            wheel_spin = (wheel_spin + wheel_spin_noise).clip(-1.0, 1.0)
-
-        # dims = [3 + 1 + 1 + 1 + 19 + 4 + 4] = [33]
-        obs = np.concatenate([speed, rpm, angle, track_pos, track, wheel_spin, lac]).astype(np.float32)
-        # print(raw["titaLineTrackPos"], raw["titaTargetTrackPos"])
-        # print(lac)
+        # dims = [3 + 3 + 1 + 1 + 1 + 19 + 4 + 1 + 12] = [45]
+        obs = np.concatenate([speed, accel, rpm, angle, track_pos, track, wheel_spin, racing_line_diff, lac]).astype(np.float32)
+        
+        if self.observation_noise is True: 
+            obs_noise = self.np_random.normal(0.0, 0.025, size=obs.shape).astype(np.float32)
+            obs = (obs + obs_noise).astype(np.float32)
+        
+        obs = np.clip(obs, -1.0, 1.0).astype(np.float32)
         return obs
 
     def _reward(self, obs: dict[str, Any], prev: dict[str, Any], action: np.ndarray) -> float:
-        speed = float(obs["speedX"]) / MAX_SPEED
+        speed_kmh = float(obs["speedX"]) 
+        speed = speed_kmh / MAX_SPEED
         angle = float(obs["angle"])
         track = np.asarray(obs["track"], dtype=np.float32)
         track_pos = float(obs["trackPos"])
@@ -447,55 +535,60 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         # NOTE: Target track pos from tita bot is flipped (i.e. left = -1.0 and right = 1.0),
         # but track_pos is encoded as -1.0 = right and 1.0 = left...
         target_track_pos = -1.0 * float(obs["titaLineTrackPos"])
-        racing_line_diff = abs(track_pos - target_track_pos)
+        racing_line_diff = abs(track_pos - target_track_pos) / 2.0  # [0, 1]
         # print(f"TrackPos: {track_pos:.2f}\tTargetTrackPos: {target_track_pos:.2f}")
 
         # Main reward function
-        reward = speed * (np.cos(angle) - abs(np.sin(angle)) - racing_line_diff)
-        # reward = speed * (np.cos(angle) - abs(np.sin(angle)) - racing_line_diff)
+        reward = speed * (1.0 - racing_line_diff)
+        # reward = speed * (np.cos(angle) - np.sin(angle) - racing_line_diff)
 
         # Collision
-        damage_delta = float(obs["damage"]) - float(prev["damage"]) 
+        damage_delta = float(obs["damage"]) - float(prev["damage"])
         if damage_delta > 0.0:
             return -10.0
 
-        # Off-track
-        if track.min() < 0.0 or abs(track_pos) > 1.0:
+        if abs(track_pos) > 1.0 or track.min() < 0.0:
             return -10.0
-
-        # Moving backwards
+        
+        # Moving backward
         if np.cos(angle) < 0.0:
             return -10.0
         
         # Terminal judge start
-        progress_kmh = MAX_SPEED * speed
-        if self.time_step > TERMINAL_JUDGE_START and progress_kmh < TERMINATION_LIMIT_PROGRESS:
+        if self.time_step > TERMINAL_JUDGE_START and speed_kmh < TERMINATION_LIMIT_PROGRESS:
             return -10.0
 
         return float(reward)
 
     def _terminated(self, obs: dict[str, Any], prev: dict[str, Any]) -> bool:
-        speed = float(obs["speedX"])
+        speed_kmh = float(obs["speedX"])
         angle = float(obs["angle"])
-        trackPos = float(obs["trackPos"])
+        track_pos = float(obs["trackPos"])
         track = np.asarray(obs["track"], dtype=np.float32)
-        progress = speed * np.cos(angle)
 
-        if track.min() < 0.0 or abs(trackPos) > 1.0:
+        if abs(track_pos) > 1.0 or track.min() < 0.0:
             return True
-        if self.time_step > TERMINAL_JUDGE_START and progress < TERMINATION_LIMIT_PROGRESS:
+
+        # Terminal judge start 
+        if self.time_step > TERMINAL_JUDGE_START and speed_kmh < TERMINATION_LIMIT_PROGRESS:
             return True
-        if np.cos(float(obs["angle"])) < 0.0:
+        
+        # Moving backwards 
+        if np.cos(angle) < 0.0:
             return True
-        if float(obs["damage"]) - float(prev["damage"]) > 0.0:
+        
+        # Damage 
+        damage_delta = float(obs["damage"]) - float(prev["damage"])
+        if damage_delta > 0.0:
             return True
+
         return False
     
     def _truncated(self, obs: dict[str, Any]) -> bool:
         if float(obs["lastLapTime"]) > 0.0 and self.truncate_on_successful_lap is True:
             return True
-        if self.time_step >= self.max_episode_steps:
-            return True 
+        if self.time_step + 1 >= self.torcs_max_episode_steps:
+            return True
         return False
 
     def _done_td(self, obs: dict[str, Any], prev: dict[str, Any]) -> bool:
@@ -515,10 +608,10 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
         crashed = damage_delta > 0.0
 
         tita_steer = float(obs["titaSteer"])
-        tita_brake = float(obs["titaBrake"])
         tita_gas = float(obs["titaGas"])
-
-        action_tita = np.array([tita_steer, tita_gas - tita_brake], dtype=np.float32)
+        tita_brake = float(obs["titaBrake"])
+        tita_throttle = tita_gas - tita_brake
+        action_tita = np.array([tita_steer, tita_throttle], dtype=np.float32)
 
         return {
             "successfulLap": bool(float(obs["lastLapTime"]) > 0.0),
@@ -531,7 +624,10 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             "speedX": obs["speedX"],
             "done_td": crashed or off_track,
             "lastLapTime" : float(obs["lastLapTime"]),
-            "action_tita" : action_tita
+            "action_tita" : action_tita,     # The action tita bot might take (nearly expert an action :D)
+            "globalX" : obs["x"],
+            "globalY" : obs["y"],
+            "distFromStart" : float(obs["distFromStart"])
         }
 
     @staticmethod
@@ -546,3 +642,21 @@ class TorcsEnv(gym.Env[np.ndarray, np.ndarray]):
             return gear - 1
 
         return gear
+
+    def _get_racing_line(self, track_name: str):
+        racing_line_path = RACING_LINES.get(track_name)
+        if racing_line_path is None:
+            return None, None, None
+
+        racing_line_path = str(racing_line_path)
+
+        if not os.path.exists(racing_line_path) or not racing_line_path.endswith(".csv"):
+            return None, None, None
+
+        if track_name not in self._racing_line_cache:
+            self._racing_line_cache[track_name] = RacingLineCurvatureMap.from_csv(racing_line_path)
+
+        curv_map = self._racing_line_cache[track_name]
+        track_length = curv_map.track_length
+
+        return curv_map, racing_line_path, track_length

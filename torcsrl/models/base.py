@@ -6,6 +6,7 @@ from gymnasium.spaces import Box
 import torch
 import torch.nn as nn
 
+
 class Actor(nn.Module, ABC):
     def __init__(
             self, 
@@ -24,6 +25,13 @@ class Actor(nn.Module, ABC):
         self.register_buffer("action_scale", torch.as_tensor(action_scale_np, dtype=torch.float32))
         self.register_buffer("action_bias", torch.as_tensor(action_bias_np, dtype=torch.float32))
 
+    def init_xavier_uniform(self, gain: float = 1.0) -> None:
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=gain)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
     @abstractmethod
     def forward(self, obs: torch.Tensor):
         raise NotImplementedError
@@ -33,16 +41,20 @@ class Actor(nn.Module, ABC):
         raise NotImplementedError
 
 
+
 class Critic(nn.Module, ABC):
     def __init__(self, obs_dim: int, action_dim: int) -> None:
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
 
+    def init_xavier_uniform(self, gain: float = 1.0) -> None:
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=gain)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
     @abstractmethod
     def forward(self, obs: torch.Tensor, actoin: torch.Tensor):
-        raise NotImplementedError
-
-    @abstractmethod 
-    def q(self, obs: torch.Tensor, action: torch.Tensor):
         raise NotImplementedError

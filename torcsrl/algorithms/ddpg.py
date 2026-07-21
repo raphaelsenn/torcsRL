@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import gymnasium as gym
 
 from torcsrl.algorithms.base import OffPolicyAlgorithm
-from torcsrl.models.ac_ddpg import ActorMLP, CriticMLP, DEFAULT_AC_KWARGS
+from torcsrl.models.ddpg_networks import ActorMLP, CriticMLP, DEFAULT_AC_KWARGS
 
 
 class DDPG(OffPolicyAlgorithm):

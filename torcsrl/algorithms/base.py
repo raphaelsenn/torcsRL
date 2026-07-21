@@ -111,7 +111,6 @@ class RLAlgorithm(ABC):
         action = action.flatten().cpu().numpy()                                 # [action_dim]
         return action
 
-
     @torch.no_grad()
     def evaluate(self) -> None:
         env = self.val_env
