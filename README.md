@@ -4,6 +4,12 @@ There are several TORCS reinforcement learning projects, many of them are based 
 
 This repo provides a modern PyTorch implementation/interface for training RL agents in TORCS. It uses a Gymnasium environment interface and provides configurable training and evaluation tracks.
 
+<p align="center">
+  <img src="./assets/td3_racing_gif.gif">
+</p>
+
+<p align="center"> <em>Gif: Trained TD3 policy racing on Alpine-1.</em> </p>
+
 ## Implemented Algoritms
 
 * DDPG (N-Step)
