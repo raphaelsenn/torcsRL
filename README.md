@@ -1,7 +1,5 @@
 # torcsRL
 
-There are several TORCS reinforcement learning projects, many of them are based on older codebases and use old versions of Keras or TensorFlow.
-
 This repo provides a modern PyTorch implementation/interface for training RL agents in TORCS. It uses a Gymnasium environment interface and provides configurable training and evaluation tracks.
 
 <p align="center">
@@ -335,5 +333,26 @@ pip install -e .
       archivePrefix={arXiv},
       primaryClass={cs.AI},
       url={https://arxiv.org/abs/1802.09477}, 
+}
+
+@misc{haarnoja2018softactorcriticoffpolicymaximum,
+      title={Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor}, 
+      author={Tuomas Haarnoja and Aurick Zhou and Pieter Abbeel and Sergey Levine},
+      year={2018},
+      eprint={1801.01290},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/1801.01290}, 
+}
+
+
+@misc{fujimoto2023salestateactionrepresentationlearning,
+      title={For SALE: State-Action Representation Learning for Deep Reinforcement Learning}, 
+      author={Scott Fujimoto and Wei-Di Chang and Edward J. Smith and Shixiang Shane Gu and Doina Precup and David Meger},
+      year={2023},
+      eprint={2306.02451},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2306.02451}, 
 }
 ```
